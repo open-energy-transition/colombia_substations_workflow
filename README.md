@@ -1,14 +1,14 @@
 # Colombia Substations Workflow
 
-End-to-end, reproducible pipeline to ingest, clean, enrich, merge, and match substation datasets from **XM (PARATEC)**, **UPME**, and **OSM**, and finally produce an **interactive map**.
+End-to-end, reproducible pipeline to ingest, clean, enrich, merge, and match substation datasets from **XM (PARATEC)**, **UPME**, and **OSM**, and produce an **interactive map**.
 
-The workflow is orchestrated with **Snakemake**, is **cross-platform** (Windows/Linux/macOS), keeps the original scripts **unchanged**, and writes artifacts into **per-stage output folders**.
+The workflow is orchestrated with **Snakemake**, is **cross-platform** (Windows/Linux/macOS), and writes artifacts into **per-stage output folders**.
 
 ---
 
 ## Features
 
-- Single source input: `data/PARATEC_Subestaciones30-08-2025.xlsx`
+- Single source input: `data/PARATEC_Subestaciones30-08-2025.xlsx` (needs to be downloaded first from https://paratec.xm.com.co/reportes/subestaciones)
 - Deterministic DAG with Snakemake (`Snakefile` + `pipeline.smk.yaml`)
 - Per-stage outputs: `outputs/osm`, `outputs/xm`, `outputs/upme`, `outputs/merge`, `outputs/match`, `outputs/map`
 - CSV/GeoJSON artifacts for GIS + QA
@@ -51,7 +51,7 @@ outputs/
 
 - Python 3.9+ (tested with 3.11)
 - Snakemake (e.g., `pip install snakemake`)
-- Libraries used by the scripts: `pandas`, `numpy`, `requests`, `rapidfuzz` (optional), `folium`/`branca` (if used by `plot_map.py`)
+- Libraries used by the scripts: `pandas`, `numpy`, `requests`, `rapidfuzz` (optional), `folium`/`branca`
 
 > Tip: create a virtualenv and install your deps with `pip install -r requirements.txt` (optional).
 
@@ -218,39 +218,6 @@ Stages run **inside their own output folder**, so each script’s relative I/O l
   snakemake outputs/map/paratec_map.html -j 1 -p
   ```
 
----
-
-## Troubleshooting
-
-- **Missing script path**
-  - *Symptom:* `FileNotFoundError` for `scripts/*.py`.
-  - *Fix:* Update `pipeline.smk.yaml → scripts.*` to the correct paths (e.g., `scripts/plot_map.py`).
-
-- **Excel not found / wrong name**
-  - *Symptom:* Stage 2 can’t find `PARATEC_Subestaciones30-08-2025.xlsx`.
-  - *Fix:* Place it in `data/` and ensure it matches `xm_excel.expected_name` in the YAML.
-
-- **Network / API rate limits (OSM or UPME)**
-  - *Symptom:* HTTP errors/timeouts in Stage 1 or 3.
-  - *Fix:* Re-run with fewer cores:
-    ```bash
-    snakemake -j 1 -p --verbose
-    ```
-
-- **CSV parsing issues**
-  - *Symptom:* Misread rows due to commas/quotes/newlines.
-  - *Fix:* Use a CSV-aware reader (e.g., `pandas.read_csv`). Scripts already emit UTF-8-SIG with proper quoting.
-
-- **Windows shell errors**
-  - *Symptom:* Errors mentioning `set -euo pipefail` or `ln`.
-  - *Fix:* Use the provided `Snakefile` with Python `run:` blocks (no Bash). Replace any older bashy Snakefile.
-
-- **Missing dependencies**
-  - *Symptom:* `ModuleNotFoundError: pandas` (or similar).
-  - *Fix:* Install required libs:
-    ```bash
-    pip install pandas numpy requests rapidfuzz folium branca
-    ```
 
 - **Inspect detailed logs**
   - Run with:
@@ -258,12 +225,5 @@ Stages run **inside their own output folder**, so each script’s relative I/O l
     snakemake -j 1 -p --verbose
     ```
   - Or check `.snakemake/log/*.log`.
-
-- **Force rebuild a stale target**
-  - Example:
-    ```bash
-    rm outputs/match/OSM_PARATEC_enriched.csv
-    snakemake outputs/match/OSM_PARATEC_enriched.csv -j 2 -p
-    ```
 
 ---
