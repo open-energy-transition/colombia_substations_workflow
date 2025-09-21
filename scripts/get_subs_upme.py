@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Download ALL substations shown on PARATEC's map as GeoJSON (EPSG:4326) for JOSM.
+Download ALL substations available in UPME as GeoJSON (EPSG:4326) for JOSM.
 
 Outputs:
-  - subestaciones_upme.geojson (pretty-printed)
+  - subestaciones_upme.geojson
   - subestaciones_upme.csv
 """
 

@@ -4,18 +4,18 @@
 """
 merge_subestaciones.py
 
-Genera:
-  - PARATEC_with_coords.csv (PARATEC + lon/lat de UPME por match exacto + fuzzy)
-  - PARATEC_unmatched_in_UPME.csv (subestaciones de PARATEC sin match aceptado)
-  - PARATEC_fuzzy_matches.csv (subestaciones emparejadas por fuzzy, con score y coords)
+Generates:
+  - PARATEC_with_coords.csv (PARATEC + lon/lat from UPME by exact + fuzzy match)
+  - PARATEC_unmatched_in_UPME.csv (PARATEC substations without an accepted match)
+  - PARATEC_fuzzy_matches.csv (substations matched by fuzzy logic, with score and coords)
 
-Características:
-  - Lectura robusta (autodetección de codificación y delimitador; limpieza de BOM/Unnamed).
-  - Normalización agresiva y tokenización con números romanos/arábigos y stopwords del dominio.
-  - Matching exacto + fuzzy (rapidfuzz si disponible; fallback difflib).
-  - Deduplicación UPME priorizando filas con lon/lat válidos.
-  - Salidas con el mismo delimitador que PARATEC y UTF-8 con BOM.
-  - Prints ASCII-safe para consola Windows.
+Features:
+  - Robust reading (auto-detects encoding and delimiter; cleans BOM/Unnamed).
+  - Aggressive normalization and tokenization with Roman/Arabic numerals and domain stopwords.
+  - Exact + fuzzy matching (rapidfuzz if available; difflib as fallback).
+  - UPME deduplication prioritizing rows with valid lon/lat.
+  - Outputs with the same delimiter as PARATEC and UTF-8 with BOM.
+  - ASCII-safe prints for Windows console.
 """
 
 import sys

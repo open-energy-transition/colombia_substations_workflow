@@ -1,6 +1,5 @@
-# clean_paratec_subestaciones_selective_ffill.py
-# Convierte el XLSX a CSV y solo hace forward-fill en celdas originalmente vacías,
-# sin tocar los '-' reales. Propaga dentro de cada subestación (grupo por 'Nombre').
+#Convert the XLSX of XM dashboard substations information to CSV and only perform forward-fill on originally empty cells, without touching the real '-' values. 
+#Propagate within each substation (grouped by 'Name').
 
 import pandas as pd
 from pathlib import Path
