@@ -1,4 +1,11 @@
-# Snakefile (Windows-safe) — pure Python run blocks, no bash utils
+# Snakefile — cross-platform orchestration with per-stage output folders.
+# Stage order (1..6):
+#   1) OSM pull & filter        → outputs/osm
+#   2) XM (PARATEC) clean       → outputs/xm
+#   3) UPME pull                → outputs/upme
+#   4) Merge XM+UPME            → outputs/merge
+#   5) OSM↔XM match + reports   → outputs/match
+#   6) Interactive map (Folium) → outputs/map
 
 from pathlib import Path
 import shutil
@@ -8,104 +15,119 @@ import sys
 configfile: "pipeline.smk.yaml"
 
 WORKDIR = Path(config["workdir"]).resolve()
+STAGE   = {k: Path(v).resolve() for k, v in config["stage_dirs"].items()}
 SCRIPTS = config["scripts"]
 XM_XLSX = Path(config["xm_excel"]["path"]).resolve()
 XM_EXPECTED_NAME = config["xm_excel"]["expected_name"]
 PYEXE = config.get("python", sys.executable)
 
+def ensure_dir(p: Path):
+    p.mkdir(parents=True, exist_ok=True)
+
 def runpy(script_path: Path, workdir: Path):
-    subprocess.run([PYEXE, str(script_path)], cwd=str(workdir), check=True)
+    ensure_dir(workdir)
+    subprocess.run([PYEXE, str(script_path.resolve())], cwd=str(workdir), check=True)
 
 def assert_nonempty(p: Path):
     if (not p.exists()) or p.stat().st_size == 0:
         raise RuntimeError(f"Expected non-empty file not found: {p}")
 
+# ---------------- Final targets (now includes the map) ----------------
 rule all:
     input:
-        WORKDIR / "OSM_PARATEC_enriched.csv",
-        WORKDIR / "PARATEC_enriched_coords.csv",
-        WORKDIR / "PARATEC_not_in_OSM.geojson",
-        WORKDIR / "PARATEC_not_in_OSM.csv",
-        WORKDIR / "PARATEC_not_in_OSM_missing_coords.csv",
-        WORKDIR / "MATCHES_by_type.csv",
-        WORKDIR / "MATCHES_summary.csv",
-        WORKDIR / "osm_substations_filtered.csv",
-        WORKDIR / "osm_substations_named_no_voltage.geojson",
-        WORKDIR / "osm_substations_voltage_no_name.geojson",
-        WORKDIR / "PARATEC_substations.csv",
-        WORKDIR / "subestaciones_upme.csv",
-        WORKDIR / "subestaciones_upme.geojson",
-        WORKDIR / "PARATEC_with_coords.csv",
-        WORKDIR / "PARATEC_unmatched_in_UPME.csv",
-        WORKDIR / "PARATEC_fuzzy_matches.csv"
+        # main deliverables (match stage)
+        STAGE["match"] / "OSM_PARATEC_enriched.csv",
+        STAGE["match"] / "PARATEC_enriched_coords.csv",
+        STAGE["match"] / "PARATEC_not_in_OSM.geojson",
+        STAGE["match"] / "PARATEC_not_in_OSM.csv",
+        STAGE["match"] / "PARATEC_not_in_OSM_missing_coords.csv",
+        STAGE["match"] / "MATCHES_by_type.csv",
+        STAGE["match"] / "MATCHES_summary.csv",
+        # intermediates per stage
+        STAGE["osm"]   / "osm_substations_filtered.csv",
+        STAGE["osm"]   / "osm_substations_named_no_voltage.geojson",
+        STAGE["osm"]   / "osm_substations_voltage_no_name.geojson",
+        STAGE["xm"]    / "PARATEC_substations.csv",
+        STAGE["upme"]  / "subestaciones_upme.csv",
+        STAGE["upme"]  / "subestaciones_upme.geojson",
+        STAGE["merge"] / "PARATEC_with_coords.csv",
+        STAGE["merge"] / "PARATEC_unmatched_in_UPME.csv",
+        STAGE["merge"] / "PARATEC_fuzzy_matches.csv",
+        # final interactive map
+        STAGE["map"]   / "paratec_map.html"
 
-# Stage 2: XM Excel -> PARATEC_substations.csv
-rule clean_paratec_excel_to_csv:
-    input:
-        xlsx = XM_XLSX
-    output:
-        csv = WORKDIR / "PARATEC_substations.csv"
-    run:
-        # Ensure the cleaner sees the filename it expects, in WORKDIR
-        expected = WORKDIR / XM_EXPECTED_NAME
-        if str(input.xlsx) != str(expected):
-            expected.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(str(input.xlsx), str(expected))
-        runpy(Path(SCRIPTS["clean_paratec_subestaciones"]).resolve(), WORKDIR)
-        assert_nonempty(Path(output.csv))
-
-# Stage 3: UPME pull
-rule get_upme_substations:
-    output:
-        csv = WORKDIR / "subestaciones_upme.csv",
-        gj  = WORKDIR / "subestaciones_upme.geojson"
-    run:
-        runpy(Path(SCRIPTS["get_subs_upme"]).resolve(), WORKDIR)
-        assert_nonempty(Path(output.csv))
-        assert_nonempty(Path(output.gj))
-
-# Stage 1: OSM pull & filter
+# ---------------- Stage 1: OSM pull & filter → outputs/osm ----------------
 rule get_osm_substations:
     output:
-        csv = WORKDIR / "osm_substations_filtered.csv",
-        gj1 = WORKDIR / "osm_substations_named_no_voltage.geojson",
-        gj2 = WORKDIR / "osm_substations_voltage_no_name.geojson"
+        csv = STAGE["osm"] / "osm_substations_filtered.csv",
+        gj1 = STAGE["osm"] / "osm_substations_named_no_voltage.geojson",
+        gj2 = STAGE["osm"] / "osm_substations_voltage_no_name.geojson"
     run:
-        runpy(Path(SCRIPTS["get_osm_subs"]).resolve(), WORKDIR)
+        runpy(Path(SCRIPTS["get_osm_subs"]), STAGE["osm"])
         assert_nonempty(Path(output.csv))
         assert_nonempty(Path(output.gj1))
         assert_nonempty(Path(output.gj2))
 
-# Stage 4: Merge PARATEC + UPME
+# ---------------- Stage 2: XM (PARATEC) Excel → CSV → outputs/xm ----------------
+rule clean_paratec_excel_to_csv:
+    input:
+        xlsx = XM_XLSX
+    output:
+        csv = STAGE["xm"] / "PARATEC_substations.csv"
+    run:
+        ensure_dir(STAGE["xm"])
+        expected = STAGE["xm"] / XM_EXPECTED_NAME
+        if str(input.xlsx) != str(expected):
+            shutil.copyfile(str(input.xlsx), str(expected))
+        runpy(Path(SCRIPTS["clean_paratec_subestaciones"]), STAGE["xm"])
+        assert_nonempty(Path(output.csv))
+
+# ---------------- Stage 3: UPME pull → outputs/upme ----------------
+rule get_upme_substations:
+    output:
+        csv = STAGE["upme"] / "subestaciones_upme.csv",
+        gj  = STAGE["upme"] / "subestaciones_upme.geojson"
+    run:
+        runpy(Path(SCRIPTS["get_subs_upme"]), STAGE["upme"])
+        assert_nonempty(Path(output.csv))
+        assert_nonempty(Path(output.gj))
+
+# ---------------- Stage 4: Merge XM + UPME → outputs/merge ----------------
 rule merge_paratec_upme:
     input:
-        par_csv = WORKDIR / "PARATEC_substations.csv",
-        upme_csv = WORKDIR / "subestaciones_upme.csv"
+        par_csv  = STAGE["xm"]   / "PARATEC_substations.csv",
+        upme_csv = STAGE["upme"] / "subestaciones_upme.csv"
     output:
-        merged   = WORKDIR / "PARATEC_with_coords.csv",
-        unmatched = WORKDIR / "PARATEC_unmatched_in_UPME.csv",
-        fuzzy    = WORKDIR / "PARATEC_fuzzy_matches.csv"
+        merged    = STAGE["merge"] / "PARATEC_with_coords.csv",
+        unmatched = STAGE["merge"] / "PARATEC_unmatched_in_UPME.csv",
+        fuzzy     = STAGE["merge"] / "PARATEC_fuzzy_matches.csv"
     run:
-        runpy(Path(SCRIPTS["merge_subestaciones"]).resolve(), WORKDIR)
+        ensure_dir(STAGE["merge"])
+        shutil.copyfile(str(input.par_csv),  str(STAGE["merge"] / "PARATEC_substations.csv"))
+        shutil.copyfile(str(input.upme_csv), str(STAGE["merge"] / "subestaciones_upme.csv"))
+        runpy(Path(SCRIPTS["merge_subestaciones"]), STAGE["merge"])
         assert_nonempty(Path(output.merged))
         assert_nonempty(Path(output.unmatched))
         assert_nonempty(Path(output.fuzzy))
 
-# Stage 5: OSM ↔ PARATEC match & enriched outputs
+# ---------------- Stage 5: OSM ↔ XM match + reports → outputs/match ----------------
 rule osm_paratec_match:
     input:
-        merged = WORKDIR / "PARATEC_with_coords.csv",
-        osm    = WORKDIR / "osm_substations_filtered.csv"
+        merged = STAGE["merge"] / "PARATEC_with_coords.csv",
+        osm    = STAGE["osm"]   / "osm_substations_filtered.csv"
     output:
-        enr       = WORKDIR / "OSM_PARATEC_enriched.csv",
-        par_enr   = WORKDIR / "PARATEC_enriched_coords.csv",
-        not_gj    = WORKDIR / "PARATEC_not_in_OSM.geojson",
-        not_csv   = WORKDIR / "PARATEC_not_in_OSM.csv",
-        not_miss  = WORKDIR / "PARATEC_not_in_OSM_missing_coords.csv",
-        m_type    = WORKDIR / "MATCHES_by_type.csv",
-        m_sum     = WORKDIR / "MATCHES_summary.csv"
+        enr       = STAGE["match"] / "OSM_PARATEC_enriched.csv",
+        par_enr   = STAGE["match"] / "PARATEC_enriched_coords.csv",
+        not_gj    = STAGE["match"] / "PARATEC_not_in_OSM.geojson",
+        not_csv   = STAGE["match"] / "PARATEC_not_in_OSM.csv",
+        not_miss  = STAGE["match"] / "PARATEC_not_in_OSM_missing_coords.csv",
+        m_type    = STAGE["match"] / "MATCHES_by_type.csv",
+        m_sum     = STAGE["match"] / "MATCHES_summary.csv"
     run:
-        runpy(Path(SCRIPTS["osm_paratec_match"]).resolve(), WORKDIR)
+        ensure_dir(STAGE["match"])
+        shutil.copyfile(str(input.merged), str(STAGE["match"] / "PARATEC_with_coords.csv"))
+        shutil.copyfile(str(input.osm),    str(STAGE["match"] / "osm_substations_filtered.csv"))
+        runpy(Path(SCRIPTS["osm_paratec_match"]), STAGE["match"])
         assert_nonempty(Path(output.enr))
         assert_nonempty(Path(output.par_enr))
         assert_nonempty(Path(output.not_gj))
@@ -113,3 +135,16 @@ rule osm_paratec_match:
         assert_nonempty(Path(output.not_miss))
         assert_nonempty(Path(output.m_type))
         assert_nonempty(Path(output.m_sum))
+
+# ---------------- Stage 6: Interactive map (Folium) → outputs/map ----------------
+rule plot_interactive_map:
+    input:
+        enr = STAGE["match"] / "OSM_PARATEC_enriched.csv"
+    output:
+        html = STAGE["map"] / "paratec_map.html"
+    run:
+        ensure_dir(STAGE["map"])
+        # plot_map.py expects 'OSM_PARATEC_enriched.csv' in CWD and creates 'paratec_map.html'
+        shutil.copyfile(str(input.enr), str(STAGE["map"] / "OSM_PARATEC_enriched.csv"))
+        runpy(Path(SCRIPTS["plot_map"]), STAGE["map"])
+        assert_nonempty(Path(output.html))
