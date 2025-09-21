@@ -44,7 +44,6 @@ PREFERRED_VOLTAGE_COLORS = {
     750: "#FF4081",   # pink
 }
 
-# A vivid, colorblind-aware-ish cycle for any other levels encountered
 VIVID_CYCLE = [
     "#00BCD4", "#FF5722", "#8BC34A", "#3F51B5",
     "#FFC107", "#E91E63", "#4CAF50", "#9C27B0",
