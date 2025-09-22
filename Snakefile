@@ -32,7 +32,7 @@ def assert_nonempty(p: Path):
     if (not p.exists()) or p.stat().st_size == 0:
         raise RuntimeError(f"Expected non-empty file not found: {p}")
 
-# ---------------- Final targets (now includes the map) ----------------
+# ---------------- Final targets----------------
 rule all:
     input:
         # main deliverables (match stage)
