@@ -12,16 +12,19 @@ OSM_CSV  = "osm_substations_filtered.csv"
 
 FUZZY_THRESHOLD = 70
 
-# Outputs (los que ya estaban bien se mantienen)
+# Outputs 
 OUT_PAR_ENR   = "PARATEC_enriched_coords.csv"
 OUT_PAR_GJ    = "PARATEC_not_in_OSM.geojson"
-OUT_PAR_MISS  = "PARATEC_not_in_OSM_missing_coords.csv"   # se sigue generando (no lo pediste eliminar)
-OUT_MATCH_SUM = "MATCHES_summary.csv"                     # se mantiene
+OUT_PAR_MISS  = "PARATEC_not_in_OSM_missing_coords.csv"   
+OUT_MATCH_SUM = "MATCHES_summary.csv"                     
+OUT_OSM_NOT = "OSM_not_in_PARATEC.csv"
 
-# NUEVOS (reemplazan 11–14)
-OUT_OSM_ENR_MIN = "OSM_PARATEC_enriched.csv"              # (11)
-OUT_PAR_NOT_CSV = "PARATEC_not_in_OSM.csv"                # (12, CSV compañero del GeoJSON)
-OUT_MATCH_TYPE  = "MATCHES_by_type.csv"                   # (13, resumen mínimo)
+OUT_OSM_ENR_MIN = "OSM_PARATEC_enriched.csv"              
+OUT_PAR_NOT_CSV = "PARATEC_not_in_OSM.csv"                
+OUT_MATCH_TYPE  = "MATCHES_by_type.csv" 
+
+OUT_OSM_NOT_GJ = "OSM_not_in_PARATEC.geojson"
+
 
 # ------------- CSV I/O utils -------------
 
@@ -319,6 +322,32 @@ def main():
     }), OUT_MATCH_SUM, osm_delim, osm_enc, osm_eol)
     print(f"Wrote {OUT_MATCH_SUM}")
 
+    # ---------- OSM_not_in_PARATEC: OSM uniques by name with no match in XM/PARATEC ----------
+    osm_not = df_osm_best[~df_osm_best["_key"].isin(osm_to_par.keys())].copy()
+
+    # Keep minimal usufeul columns
+    cols_osm_min = []
+    for c in ["lon", "lat", "name", "voltage", "operator", "substation", "osm_ids", "osm_types"]:
+        if c in df_osm_best.columns:
+            cols_osm_min.append(c)
+    if not cols_osm_min:
+        cols_osm_min = ["lon", "lat", "name"]  # guaranteed by earlier assertions
+
+    to_csv_like_source(osm_not[cols_osm_min], OUT_OSM_NOT, osm_delim, osm_enc, osm_eol)
+    print(f"Wrote {OUT_OSM_NOT} ({len(osm_not)} rows)")
+
+    # Optional GeoJSON for JOSM work
+    try:
+        df_to_geojson_points(osm_not.rename(columns={"lon":"OSM_lon","lat":"OSM_lat"})
+                             .rename(columns={"OSM_lon":"lon","OSM_lat":"lat"}), 
+                             OUT_OSM_NOT_GJ, lon_col="lon", lat_col="lat")
+        print(f"Wrote {OUT_OSM_NOT_GJ}")
+    except Exception:
+        pass
+
+
+
+
     # Console summary
     print("--- Summary ---")
     print(f"PARATEC rows (raw):                {len(df_par_raw)}")
@@ -330,6 +359,11 @@ def main():
 
     pct = 100.0 * len(matched_osm_keys) / len(df_par) if len(df_par) > 0 else 0.0
     print(f"OSM Substation matched with XM-UPME dataset:         {len(matched_osm_keys)} / {len(df_par)} ({pct:.1f}%)")
+
+    # How many OSM uniques are not covered by XM-UPME matched dataset
+    print(f"OSM not in XM-UPME:             {len(osm_not)}")
+    pct_osm_covered = 100.0 * (len(df_osm_best) - len(osm_not)) / len(df_osm_best) if len(df_osm_best) > 0 else 0.0
+    print(f"OSM covered by XM:                 {len(df_osm_best) - len(osm_not)} / {len(df_osm_best)} ({pct_osm_covered:.1f}%)")
 
 if __name__ == "__main__":
     main()
