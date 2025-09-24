@@ -298,6 +298,7 @@ def enrich_and_write_outputs(paratec_df, osm_df, exact_hits, fuzzy_hits,
     # 6) OSM_PARATEC_enriched.csv (OSM con solo los que hicieron match)
     matched_j = {j for _, j in exact_hits} | {j for _, j, _ in fuzzy_hits}
     osm_min = osm_df.loc[osm_df.index.isin(matched_j), ["name", "lat", "lon"]].copy()
+    osm_min["Nombre"] = osm_min["name"]
     to_csv_like_source(osm_min, OUT_OSM_ENR_MIN, OSM_CSV)
     print(f"[OK] Wrote {OUT_OSM_ENR_MIN} ({len(osm_min)} rows)")
 
