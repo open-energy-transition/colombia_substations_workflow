@@ -6,7 +6,7 @@ from collections import defaultdict
 import pandas as pd
 import numpy as np
 
-# --- Matching centralizado---
+# --- Matching centralizado (sin tocar lógica de outputs/prints) ---
 from matching_utils import (
     HAS_RAPIDFUZZ,
     strip_accents,
@@ -14,7 +14,7 @@ from matching_utils import (
     roman_to_arabic_token,
     arabic_to_roman_token,
     tokenize,
-    normalized_key,        
+    normalized_key,           # alias del "strict" (conserva comportamiento)
     normalized_key_strict,
     normalized_key_relaxed,
     collapse_repeats,
@@ -79,7 +79,7 @@ def read_csv_smart(path):
 
 def to_csv_like_source(df, path_out, like_path):
     delim, enc, eol = sniff_csv_meta(like_path)
-    df.to_csv(path_out, index=False, encoding=enc, sep=delim, lineterminator=eol)
+    df.to_csv(path_out, index=False, encoding=enc, sep=delim, line_terminator=eol)
 
 
 # ---------------- Normalización de nombres (usa matching_utils) ----------------
@@ -298,7 +298,6 @@ def enrich_and_write_outputs(paratec_df, osm_df, exact_hits, fuzzy_hits,
     # 6) OSM_PARATEC_enriched.csv (OSM con solo los que hicieron match)
     matched_j = {j for _, j in exact_hits} | {j for _, j, _ in fuzzy_hits}
     osm_min = osm_df.loc[osm_df.index.isin(matched_j), ["name", "lat", "lon"]].copy()
-    osm_min["Nombre"] = osm_min["name"]
     to_csv_like_source(osm_min, OUT_OSM_ENR_MIN, OSM_CSV)
     print(f"[OK] Wrote {OUT_OSM_ENR_MIN} ({len(osm_min)} rows)")
 
@@ -411,7 +410,7 @@ def main():
         json.dump(gj2, f, ensure_ascii=False, indent=2)
     print(f"[OK] Wrote {OUT_OSM_NOT_GJ} ({len(feats2)} points)")
 
-    # ---------------- Console summary----------------
+    # ---------------- Console summary (idéntico al que pediste) ----------------
     print("--- Summary ---")
     print(f"PARATEC rows (raw):                {len(df_par_raw)}")
     print(f"PARATEC unique by Nombre:          {len(df_par)}")
