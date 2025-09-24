@@ -6,10 +6,9 @@ from collections import defaultdict
 import pandas as pd
 import numpy as np
 
-# ---- Centralizamos todo el matching en utils (sin cambiar lógica ni outputs) ----
+# ---- Usamos utils para normalización y scoring (no cambiamos lógica de outputs) ----
 from matching_utils import (
     normalized_key, tokenize, score_pair,
-    build_blocks, candidate_set,  # ya vienen de utils
 )
 
 # ---------------- Config ----------------
@@ -65,25 +64,78 @@ def to_csv_like_source(df, path_out, like_path):
     df.to_csv(path_out, index=False, encoding=enc, sep=delim, line_terminator=eol)
 
 
-# ---------------- Normalización (simple wrapper a utils) ----------------
+# ---------------- Normalización (wrapper a utils) ----------------
 def norm_name_key(s: str) -> str:
-    if not isinstance(s, str): return ""
+    if not isinstance(s, str):
+        s = "" if s is None else str(s)
     s = s.strip()
     return normalized_key(s) if s else ""
+
+
+# ---------------- Wrappers seguros para bloques y candidatos ----------------
+def build_blocks_safe(series: pd.Series):
+    """
+    Construye bloques por tokens de forma segura forzando string normalizado.
+    Evita keys no indexables/numéricas que rompen utils.
+    """
+    blocks = defaultdict(set)
+    for idx, val in series.items():
+        key = norm_name_key(val)
+        if not key:
+            continue
+        for t in tokenize(key):
+            if t:
+                blocks[t].add(idx)
+    return blocks
+
+
+def candidate_set_safe(name: str, blocks: dict, df: pd.DataFrame, col: str, max_cands=200):
+    """
+    Genera candidatos por intersección de tokens, con guardas para strings.
+    """
+    key = norm_name_key(name)
+    if not key:
+        return set()
+    toks = [t for t in tokenize(key) if t]
+    if not toks:
+        return set()
+
+    cand_sets = []
+    for t in toks:
+        s = blocks.get(t)
+        if s:
+            cand_sets.append(s)
+    if not cand_sets:
+        return set()
+
+    cands = set.intersection(*cand_sets) if cand_sets else set()
+
+    # Recorte por longitud similar (idéntica heurística a la versión anterior)
+    if len(cands) > max_cands:
+        L = len(key)
+        trimmed = set()
+        for i in cands:
+            k2 = norm_name_key(df.at[i, col])
+            if abs(len(k2) - L) <= 10:
+                trimmed.add(i)
+        cands = trimmed or cands
+    return cands
 
 
 # ---------------- Carga datos ----------------
 def load_paratec():
     df, meta = read_csv_smart(PARA_CSV)
     for c in ["Nombre", "lat", "lon"]:
-        if c not in df.columns: df[c] = ""
+        if c not in df.columns:
+            df[c] = ""
     return df, meta
 
 
 def load_osm():
     df, meta = read_csv_smart(OSM_CSV)
     for c in ["name", "lat", "lon"]:
-        if c not in df.columns: df[c] = ""
+        if c not in df.columns:
+            df[c] = ""
     return df, meta
 
 
@@ -103,15 +155,14 @@ def run_matching(paratec_df: pd.DataFrame, osm_df: pd.DataFrame):
 
     print(f"[INFO] Exact matches: {len(exact_hits)} | Pending fuzzy: {len(no_hits)}")
 
-    # Fuzzy por bloques (utils)
-    blocks = build_blocks(osm_df["name"])  # utils genera bloques por tokens
+    # Fuzzy por bloques (wrappers seguros)
+    blocks = build_blocks_safe(osm_df["name"])
     fuzzy_hits = []
     for i in no_hits:
         name = paratec_df.at[i, "Nombre"]
-        cand_idx = candidate_set(name, blocks, max_cands=200)  # utils
+        cand_idx = candidate_set_safe(name, blocks, osm_df, "name", max_cands=200)
         if not cand_idx:
             continue
-        # Elegir el mejor por score_pair entre claves normalizadas
         key_a = norm_name_key(name)
         best_j, best_score = None, -1.0
         for j in cand_idx:
@@ -211,7 +262,11 @@ def enrich_and_write_outputs(paratec_df, osm_df, exact_hits, fuzzy_hits, par_met
 
     # 7) MATCHES_by_type.csv
     n_exact, n_fuzzy = len(exact_hits), len(fuzzy_hits)
-    df_typ = pd.DataFrame([{"type":"exact","count":n_exact},{"type":"fuzzy","count":n_fuzzy},{"type":"total","count":n_exact+n_fuzzy}])
+    df_typ = pd.DataFrame(
+        [{"type": "exact", "count": n_exact},
+         {"type": "fuzzy", "count": n_fuzzy},
+         {"type": "total", "count": n_exact + n_fuzzy}]
+    )
     to_csv_like_source(df_typ, OUT_MATCH_TYPE, PARA_CSV)
     cov = 100.0 * (n_exact + n_fuzzy) / max(1, len(paratec_df))
     print(f"[STATS] exact={n_exact} fuzzy={n_fuzzy} total={n_exact+n_fuzzy} coverage={cov:.1f}%")
@@ -271,7 +326,7 @@ def main():
         json.dump({"type":"FeatureCollection","features":feats2}, f, ensure_ascii=False, indent=2)
     print(f"[OK] Wrote {OUT_OSM_NOT_GJ} ({len(feats2)} points)")
 
-    # -------- Console summary--------
+    # -------- Console summary (TAL CUAL lo querías) --------
     print("--- Summary ---")
     print(f"PARATEC rows (raw):                {len(df_par_raw)}")
     print(f"PARATEC unique by Nombre:          {len(df_par)}")
