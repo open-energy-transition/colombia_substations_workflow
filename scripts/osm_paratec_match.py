@@ -79,7 +79,7 @@ def read_csv_smart(path):
 
 def to_csv_like_source(df, path_out, like_path):
     delim, enc, eol = sniff_csv_meta(like_path)
-    df.to_csv(path_out, index=False, encoding=enc, sep=delim, line_terminator=eol)
+    df.to_csv(path_out, index=False, encoding=enc, sep=delim, lineterminator=eol)
 
 
 # ---------------- Normalización de nombres (usa matching_utils) ----------------
