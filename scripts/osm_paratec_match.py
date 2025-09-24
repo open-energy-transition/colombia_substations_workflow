@@ -1,312 +1,324 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-osm_paratec_match.py
-
-Cruza PARATEC (enriquecido con coords de UPME) contra OSM para producir:
-  - OSM_PARATEC_enriched.csv
-  - PARATEC_enriched_coords.csv
-  - PARATEC_not_in_OSM.geojson
-  - PARATEC_not_in_OSM.csv
-  - PARATEC_not_in_OSM_missing_coords.csv
-  - MATCHES_by_type.csv
-  - MATCHES_summary.csv
-  - (extra) OSM_not_in_PARATEC.csv
-"""
-
-import csv
-import json
+import csv, re, unicodedata, math, json
+from collections import defaultdict
 import pandas as pd
+import numpy as np
 
-# --- Utilidades compartidas de matching ---
-from matching_utils import (
-    FUZZY_THRESHOLD, HAS_RAPIDFUZZ,
-    normalize_core, tokenize, normalized_key,
-    build_blocks, candidate_set, score_pair,
-)
+# ---------------- Config ----------------
+PARA_CSV = "PARATEC_with_coords.csv"
+OSM_CSV  = "osm_substations_filtered.csv"
 
-# -----------------------------
-# Archivos de entrada/salida
-# -----------------------------
-PAR_CSV = "PARATEC_with_coords.csv"
-OSM_CSV = "osm_substations_filtered.csv"
+FUZZY_THRESHOLD = 70
 
-OUT_ENR                     = "OSM_PARATEC_enriched.csv"
-OUT_PAR_ENR_COORDS          = "PARATEC_enriched_coords.csv"
-OUT_PAR_NOT_GJ              = "PARATEC_not_in_OSM.geojson"
-OUT_PAR_NOT_CSV             = "PARATEC_not_in_OSM.csv"
-OUT_PAR_NOT_MISS_COORDS     = "PARATEC_not_in_OSM_missing_coords.csv"
-OUT_MATCHES_BY_TYPE         = "MATCHES_by_type.csv"
-OUT_MATCHES_SUMMARY         = "MATCHES_summary.csv"
-OUT_OSM_NO_PAR              = "OSM_not_in_PARATEC.csv"   # extra
+# Outputs (los que ya estaban bien se mantienen)
+OUT_PAR_ENR   = "PARATEC_enriched_coords.csv"
+OUT_PAR_GJ    = "PARATEC_not_in_OSM.geojson"
+OUT_PAR_MISS  = "PARATEC_not_in_OSM_missing_coords.csv"   # se sigue generando
+OUT_MATCH_SUM = "MATCHES_summary.csv"                     # se mantiene
 
-# -----------------------------
-# Lectura robusta
-# -----------------------------
-def sniff_encoding_and_delim(path: str):
+# NUEVOS (reemplazan 11–14)
+OUT_OSM_ENR_MIN = "OSM_PARATEC_enriched.csv"              # (11)
+OUT_PAR_NOT_CSV = "PARATEC_not_in_OSM.csv"                # (12, CSV compañero del GeoJSON)
+OUT_MATCH_TYPE  = "MATCHES_by_type.csv"                   # (13, resumen mínimo)
+
+# ------------- CSV I/O utils -------------
+
+def sniff_encoding_delim_eol(path: str):
     with open(path, "rb") as f:
         raw = f.read()
     try:
-        text = raw.decode("utf-8"); enc = "utf-8"
+        text = raw.decode("utf-8")
+        enc = "utf-8"
     except UnicodeDecodeError:
-        text = raw.decode("latin-1"); enc = "latin-1"
-    sample = "\n".join(text.splitlines()[:50])
+        text = raw.decode("latin-1")
+        enc = "latin-1"
     try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
-        delim = dialect.delimiter
+        delim = csv.Sniffer().sniff("\n".join(text.splitlines()[:200]),
+                                    delimiters=[",",";","\t","|"]).delimiter
     except Exception:
         delim = ","
-    return enc, delim
+    if "\r\n" in text[:1000]:
+        eol = "\r\n"
+    elif "\r" in text[:1000]:
+        eol = "\r"
+    else:
+        eol = "\n"
+    return enc, delim, eol
 
 def read_csv_smart(path: str):
-    enc, delim = sniff_encoding_and_delim(path)
-    df = pd.read_csv(
-        path, sep=delim, dtype=str, keep_default_na=False, na_values=[""],
-        encoding=enc, engine="python"
-    )
-    # limpia BOM y columnas Unnamed
-    df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
+    enc, delim, eol = sniff_encoding_delim_eol(path)
+    df = pd.read_csv(path, sep=delim, dtype=str, keep_default_na=False, na_values=[""],
+                     encoding=enc, engine="python")
+    df.columns = [str(c).replace("\ufeff","").strip() for c in df.columns]
     df = df[[c for c in df.columns if not str(c).startswith("Unnamed")]]
-    return df, enc, delim
+    return df, enc, delim, eol
 
-# -----------------------------
-# GeoJSON helper (points)
-# -----------------------------
-def df_to_geojson_points(df: pd.DataFrame, out_path: str, lon_col="lon", lat_col="lat"):
-    feats = []
-    for _, r in df.iterrows():
+def fmt_lon_lat(v, decimals=7):
+    if v is None or v == "" or (isinstance(v, float) and np.isnan(v)):
+        return ""
+    try:
+        return f"{float(v):.{decimals}f}"
+    except Exception:
+        return ""
+
+def _sanitize_df_for_csv(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out = out.replace({np.nan: ""})
+    for c in out.columns:
+        out[c] = out[c].astype(str).str.replace(r"[\r\n]+", " ", regex=True)
+    return out
+
+def to_csv_like_source(df: pd.DataFrame, path: str, delim: str, enc: str, eol: str, columns=None):
+    out = df.copy()
+    for c in ["lon","lat","OSM_lon","OSM_lat","PAR_lon","PAR_lat"]:
+        if c in out.columns:
+            out[c] = out[c].apply(fmt_lon_lat)
+    if "score" in out.columns:
+        out["score"] = out["score"].apply(lambda v: "" if v=="" or pd.isna(v) else f"{float(v):.1f}")
+    if columns:
+        for c in columns:
+            if c not in out.columns:
+                out[c] = ""
+        out = out[columns]
+    out = _sanitize_df_for_csv(out)
+    out.to_csv(path, index=False, sep=delim,
+               encoding=("utf-8-sig" if enc.lower().startswith("utf") else enc),
+               lineterminator=eol, quoting=csv.QUOTE_MINIMAL)
+
+# ------------- Normalización / tokenización -------------
+
+_ROMAN_MAP = {"i":"1","ii":"2","iii":"3","iv":"4","v":"5","vi":"6","vii":"7","viii":"8","ix":"9","x":"10"}
+_STOPWORDS = {"subestacion","subestación","se","s/e","estacion","estación","san","santo","santa","sta","sto","sa",
+              "calle","cll","av","avenida","norte","sur","este","oeste","oriente","occidente","de","del","la","el",
+              "eeb","eeeb","bogota","bogotá"}
+
+def strip_accents(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", str(s)) if unicodedata.category(c) != "Mn")
+
+def normalize_core(name: str) -> str:
+    if not isinstance(name, str): return ""
+    s = strip_accents(name).lower().strip()
+    s = re.sub(r"\(.*?\)", "", s)
+    s = re.sub(r"\b\d+(\.\d+)?\s*kv\b", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def roman_to_arabic_token(tok: str) -> str: return _ROMAN_MAP.get(tok, tok)
+def arabic_to_roman_token(tok: str) -> str: return {v:k for k,v in _ROMAN_MAP.items()}.get(tok, tok)
+
+def tokenize(name: str):
+    s = re.sub(r"[^a-z0-9\s]+", " ", name)
+    toks = [t for t in s.split() if t]
+    out = []
+    for t in toks:
+        t1 = roman_to_arabic_token(t); out.append(t1)
+        t2 = arabic_to_roman_token(t1)
+        if t2 != t1: out.append(t2)
+    return [t for t in out if t not in _STOPWORDS and (len(t)>1 or t.isdigit())]
+
+def normalized_key(name: str) -> str:
+    core = normalize_core(name)
+    core = re.sub(r"[^a-z0-9]+", "", core)
+    for r,a in _ROMAN_MAP.items():
+        core = re.sub(rf"{r}(?![a-z0-9])", a, core)
+    return core
+
+# ------------- Matching helpers -------------
+
+def build_blocks(keys_tokens: dict):
+    by_initial = defaultdict(set); by_lenband = defaultdict(set); token_index = defaultdict(set)
+    for k, toks in keys_tokens.items():
+        if not k: continue
+        by_initial[k[0]].add(k); by_lenband[len(k)//3].add(k)
+        for t in set(toks): token_index[t].add(k)
+    return by_initial, by_lenband, token_index
+
+def candidate_set(k, toks, by_initial, by_lenband, token_index):
+    cands = set()
+    if k: cands |= by_initial.get(k[0], set()) | by_lenband.get(len(k)//3, set())
+    for t in set(toks): cands |= token_index.get(t, set())
+    return list(cands)
+
+def score_pair(a_key, a_tokens, b_key, b_tokens, rf=None):
+    sa, sb = set(a_tokens), set(b_tokens)
+    jacc = 100.0 * (len(sa & sb) / max(1, len(sa | sb)))
+    if rf is not None:
+        from rapidfuzz import fuzz
+        tset  = fuzz.token_set_ratio(a_key, b_key)
+        tsort = fuzz.token_sort_ratio(a_key, b_key)
+        part  = fuzz.partial_ratio(a_key, b_key)
         try:
-            lon = float(str(r.get(lon_col, "")).strip())
-            lat = float(str(r.get(lat_col, "")).strip())
+            from rapidfuzz.distance import JaroWinkler
+            jw = 100.0 * JaroWinkler.normalized_similarity(a_key, b_key)
         except Exception:
-            continue
-        props = {k: (None if pd.isna(v) else v) for k, v in r.items() if k not in (lon_col, lat_col)}
-        feats.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [lon, lat]},
-            "properties": props
-        })
-    gj = {"type": "FeatureCollection", "features": feats}
+            jw = 0.0
+    else:
+        import difflib
+        ratio = 100.0 * difflib.SequenceMatcher(None, a_key, b_key).ratio()
+        tset = tsort = part = ratio; jw = 0.0
+    return 0.35*tset + 0.25*tsort + 0.15*part + 0.15*jacc + 0.10*jw
+
+def best_match_for(key, toks, osm_keys_tokens, blocks, rf=None):
+    by_initial, by_lenband, token_index = blocks
+    cands = candidate_set(key, toks, by_initial, by_lenband, token_index)
+    if not cands: return None, 0.0
+    best_k, best_s = None, -1.0
+    for ck in cands:
+        s = score_pair(key, toks, ck, osm_keys_tokens[ck], rf)
+        if s > best_s: best_s, best_k = s, ck
+    return best_k, best_s
+
+def to_float(x):
+    if x is None or x == "": return np.nan
+    s = str(x).strip().replace(",", ".")
+    try: return float(s)
+    except ValueError: return np.nan
+
+def df_to_geojson_points(df_subset: pd.DataFrame, out_path: str, lon_col="lon", lat_col="lat"):
+    gj = {"type":"FeatureCollection","features":[]}
+    for _, row in df_subset.iterrows():
+        try: lon = float(row[lon_col]); lat = float(row[lat_col])
+        except Exception: continue
+        props = row.drop([lon_col, lat_col]).to_dict()
+        gj["features"].append({"type":"Feature","properties":props,
+                               "geometry":{"type":"Point","coordinates":[lon, lat]}})
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(gj, f, ensure_ascii=False)
+        json.dump(gj, f, ensure_ascii=False, indent=2)
 
-# -----------------------------
-# Main
-# -----------------------------
+# ------------- Main -------------
+
 def main():
-    # Leer datasets
-    df_par, par_enc, par_delim = read_csv_smart(PAR_CSV)
-    df_osm, osm_enc, osm_delim = read_csv_smart(OSM_CSV)
+    # Read inputs
+    df_par_raw, par_enc, par_delim, par_eol = read_csv_smart(PARA_CSV)
+    df_osm, osm_enc, osm_delim, osm_eol     = read_csv_smart(OSM_CSV)
 
-    # Columnas de nombre
-    par_name_col = "Nombre" if "Nombre" in df_par.columns else df_par.columns[0]
-    osm_name_col = "name"   if "name"   in df_osm.columns else df_osm.columns[0]
+    assert "Nombre" in df_par_raw.columns, "PARATEC: missing 'Nombre'"
+    for c in ("lon","lat"):
+        if c not in df_par_raw.columns: df_par_raw[c] = ""
 
-    # Normalización y tokens para matching
-    df_par["_key"]    = df_par[par_name_col].astype(str).map(normalized_key)
-    df_par["_tokens"] = df_par[par_name_col].astype(str).map(normalize_core).map(tokenize)
+    assert "name" in df_osm.columns, "OSM: missing 'name'"
+    for c in ("lon","lat"):
+        if c not in df_osm.columns: df_osm[c] = ""
 
-    df_osm["_key"]    = df_osm[osm_name_col].astype(str).map(normalized_key)
-    df_osm["_tokens"] = df_osm[osm_name_col].astype(str).map(normalize_core).map(tokenize)
+    # Deduplicate PARATEC by exact Nombre
+    df_par = df_par_raw.drop_duplicates(subset=["Nombre"], keep="first").copy()
 
-    # OSM deduplicado por clave (node/way/rel -> una fila por key)
+    # Keys/tokens
+    df_par["_key"]    = df_par["Nombre"].astype(str).map(normalized_key)
+    df_par["_tokens"] = df_par["Nombre"].astype(str).map(normalize_core).map(tokenize)
+    df_osm["_key"]    = df_osm["name"].astype(str).map(normalized_key)
+    df_osm["_tokens"] = df_osm["name"].astype(str).map(normalize_core).map(tokenize)
+
+    # Numeric coords
+    for c in ("lon","lat"):
+        df_par[c] = df_par[c].map(to_float)
+        df_osm[c] = df_osm[c].map(to_float)
+
+    # Unique OSM by key
     df_osm_best = df_osm.drop_duplicates("_key", keep="first").copy()
 
-    # Sets exactos
-    keys_par = set(df_par["_key"])
-    keys_osm = set(df_osm_best["_key"])
+    # Exact + fuzzy mapping
+    keys_par, keys_osm = set(df_par["_key"]), set(df_osm_best["_key"])
     exact_found   = keys_par & keys_osm
     exact_missing = keys_par - keys_osm
 
-    # Índices para fuzzy (lado OSM)
-    osm_keys_tokens = {k: toks for k, toks in df_osm_best[["_key", "_tokens"]].itertuples(index=False)}
-    by_initial, by_lenband, token_index = build_blocks(osm_keys_tokens)
+    osm_keys_tokens = {k: toks for k, toks in df_osm_best[["_key","_tokens"]].itertuples(index=False)}
+    blocks = build_blocks(osm_keys_tokens)
+    try:
+        import rapidfuzz as rf  # noqa: F401
+        rf_mod = rf
+    except Exception:
+        rf_mod = None
 
-    if not HAS_RAPIDFUZZ:
-        print("[WARN] rapidfuzz no está instalado; usando fallback con difflib "
-              "(comparación sobre tokens ordenados). Recomendado: pip install rapidfuzz")
-
-    # Fuzzy sobre PARATEC faltantes
     df_par_missing = df_par[df_par["_key"].isin(exact_missing)].copy()
     best_keys, best_scores = [], []
     for k, toks in df_par_missing[["_key","_tokens"]].itertuples(index=False):
-        cands = candidate_set(k, toks, by_initial, by_lenband, token_index)
-        if not cands:
-            best_keys.append(None); best_scores.append(0.0); continue
-        best_k, best_s = None, -1.0
-        for ck in cands:
-            s = score_pair(k, toks, ck, osm_keys_tokens[ck])
-            if s > best_s:
-                best_s, best_k = s, ck
-        best_keys.append(best_k); best_scores.append(best_s)
+        bk, sc = best_match_for(k, toks, osm_keys_tokens, blocks, rf_mod)
+        best_keys.append(bk); best_scores.append(sc)
     df_par_missing["best_osm_key"] = best_keys
     df_par_missing["best_score"]   = best_scores
     accepted = df_par_missing["best_score"] >= FUZZY_THRESHOLD
 
-    # ------------------------------------
-    # Construir mapeos exactos + fuzzy
-    # ------------------------------------
-    par_to_osm = {k: k for k in exact_found}
-    # Agregar fuzzy aceptados
-    for k, b, sc in df_par_missing[["_key","best_osm_key","best_score"]].itertuples(index=False):
-        if pd.notna(b) and b and sc >= FUZZY_THRESHOLD:
-            par_to_osm[k] = b
-    osm_to_par = {v: k for k, v in par_to_osm.items() if v is not None}
+    # par_key -> (osm_key, match_type, score)
+    par_to_osm = {k: (k, "exact", 100.0) for k in exact_found}
+    for k, bk, sc in df_par_missing.loc[accepted, ["_key","best_osm_key","best_score"]].itertuples(index=False):
+        par_to_osm[k] = (bk, "fuzzy", float(sc))
 
-    # ------------------------------------
-    # OSM_PARATEC_enriched.csv
-    # ------------------------------------
-    # Prefijo PARATEC para no pisar columnas OSM
-    par_cols = [c for c in df_par.columns if c not in ("_key","_tokens")]
-    df_par_pref = df_par[["_key"] + par_cols].copy()
-    df_par_pref = df_par_pref.add_prefix("PARATEC_").rename(columns={"PARATEC__key":"_par_key"})
+    # osm_key -> best par_key
+    osm_to_par = {}
+    for pk, (ok, mtype, sc) in par_to_osm.items():
+        if ok not in osm_to_par or sc > osm_to_par[ok][2]:
+            osm_to_par[ok] = (pk, mtype, sc)
 
-    df_osm_enr = df_osm_best.copy()
-    df_osm_enr["_par_key"] = df_osm_enr["_key"].map(osm_to_par)
-
-    df_osm_enr = df_osm_enr.merge(
-        df_par_pref, left_on="_par_key", right_on="_par_key", how="left"
-    )
-
-    df_osm_enr.to_csv(
-        OUT_ENR, index=False, sep=osm_delim, encoding="utf-8-sig",
-        lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL
-    )
-
-    # ------------------------------------
-    # PARATEC_enriched_coords.csv
-    # ------------------------------------
-    # mapa de coords OSM por key
-    osm_coord_map = df_osm_best.set_index("_key")[["lon","lat"]].to_dict(orient="index")
-
-    df_par_ec = df_par.copy()
-    if "lon" not in df_par_ec.columns: df_par_ec["lon"] = ""
-    if "lat" not in df_par_ec.columns: df_par_ec["lat"] = ""
-
-    def fill_par_coords(row):
-        has_own = (str(row["lon"]).strip() != "") and (str(row["lat"]).strip() != "")
-        if has_own:
+    # ---------- PARATEC_enriched_coords ----------
+    osm_meta = df_osm_best.set_index("_key")[["lon","lat"]].to_dict(orient="index")
+    df_par_enr = df_par.copy()
+    def fill_coords(row):
+        if not pd.isna(row["lon"]) and not pd.isna(row["lat"]):
             return row["lon"], row["lat"]
-        k = row["_key"]
-        k_osm = par_to_osm.get(k)
-        if k_osm and k_osm in osm_coord_map:
-            c = osm_coord_map[k_osm]
-            return c.get("lon",""), c.get("lat","")
+        k = row["_key"]; mapping = par_to_osm.get(k)
+        if mapping:
+            ok = mapping[0]; m = osm_meta.get(ok, {})
+            if pd.notna(m.get("lon")) and pd.notna(m.get("lat")):
+                return m["lon"], m["lat"]
         return row["lon"], row["lat"]
+    filled = df_par_enr.apply(lambda r: fill_coords(r), axis=1, result_type="reduce")
+    df_par_enr["lon"] = [x[0] for x in filled]; df_par_enr["lat"] = [x[1] for x in filled]
+    to_csv_like_source(df_par_enr[list(df_par_raw.columns)], OUT_PAR_ENR, par_delim, par_enc, par_eol)
+    print(f"Wrote {OUT_PAR_ENR}")
 
-    df_par_ec[["lon","lat"]] = df_par_ec.apply(lambda r: pd.Series(fill_par_coords(r)), axis=1)
-    df_par_ec.to_csv(
-        OUT_PAR_ENR_COORDS, index=False, sep=par_delim, encoding="utf-8-sig",
-        lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL
-    )
+    # ---------- Not in OSM ----------
+    par_not = df_par[~df_par["_key"].isin(par_to_osm.keys())].copy()
+    par_not_with = par_not[pd.notna(par_not["lon"]) & pd.notna(par_not["lat"])].copy()
+    par_not_without = par_not[~(pd.notna(par_not["lon"]) & pd.notna(par_not["lat"]))].copy()
+    df_to_geojson_points(par_not_with, OUT_PAR_GJ, lon_col="lon", lat_col="lat")
+    to_csv_like_source(par_not[list(df_par_raw.columns)], OUT_PAR_NOT_CSV, par_delim, par_enc, par_eol)
+    print(f"Wrote {OUT_PAR_GJ} and {OUT_PAR_NOT_CSV}")
+    to_csv_like_source(par_not_without[list(df_par_raw.columns)], OUT_PAR_MISS, par_delim, par_enc, par_eol)
+    print(f"Wrote {OUT_PAR_MISS}")
 
-    # ------------------------------------
-    # PARATEC_not_in_OSM.* (CSV + GEOJSON + missing coords)
-    # ------------------------------------
-    par_not_keys = set(df_par["_key"]) - set(par_to_osm.keys())
-    df_par_not = df_par[df_par["_key"].isin(par_not_keys)].copy()
+    # ---------- OSM_PARATEC_enriched ----------
+    par_cols_no_coords = [c for c in df_par_raw.columns if c not in ("lon","lat")]
+    matched_osm_keys = list(osm_to_par.keys())
+    base = df_osm_best[df_osm_best["_key"].isin(matched_osm_keys)].copy()
+    base["PAR_key"] = base["_key"].map(lambda ok: (osm_to_par.get(ok) or (None,None,None))[0])
+    par_attrs = df_par_enr[["_key"] + par_cols_no_coords].rename(columns={"_key":"PAR_key"})
+    df_osm_enriched = base.merge(par_attrs, on="PAR_key", how="left")
+    final_cols_11 = ["lon","lat","name"] + par_cols_no_coords
+    df_osm_enriched = df_osm_enriched[final_cols_11].copy()
+    to_csv_like_source(df_osm_enriched, OUT_OSM_ENR_MIN, osm_delim, osm_enc, osm_eol)
+    print(f"Wrote {OUT_OSM_ENR_MIN}")
 
-    # CSV completo
-    df_par_not.to_csv(
-        OUT_PAR_NOT_CSV, index=False, sep=par_delim, encoding="utf-8-sig",
-        lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL
-    )
+    # ---------- MATCHES_by_type ----------
+    rows = []
+    for pk, (ok, mtype, sc) in par_to_osm.items():
+        p_name = df_par.loc[df_par["_key"]==pk, "Nombre"].iloc[0] if (df_par["_key"]==pk).any() else ""
+        o_name = df_osm_best.loc[df_osm_best["_key"]==ok, "name"].iloc[0] if (df_osm_best["_key"]==ok).any() else ""
+        rows.append({
+            "PARATEC_Nombre": p_name,
+            "OSM_name": o_name,
+            "match_type": mtype,
+            "score": f"{float(sc):.1f}"
+        })
+    df_matches_min = pd.DataFrame(rows, columns=["PARATEC_Nombre","OSM_name","match_type","score"])
+    to_csv_like_source(df_matches_min, OUT_MATCH_TYPE, osm_delim, osm_enc, osm_eol)
+    print(f"Wrote {OUT_MATCH_TYPE}")
 
-    # GeoJSON usando coords del enriched_coords (mayor cobertura)
-    df_to_geojson_points(df_par_ec[df_par_ec["_key"].isin(par_not_keys)],
-                         OUT_PAR_NOT_GJ, lon_col="lon", lat_col="lat")
+    to_csv_like_source(df_matches_min.rename(columns={
+        "PARATEC_Nombre":"PAR_Nombre","OSM_name":"OSM_name"
+    }), OUT_MATCH_SUM, osm_delim, osm_enc, osm_eol)
+    print(f"Wrote {OUT_MATCH_SUM}")
 
-    # Subconjunto sin coords
-    def _is_empty(v): 
-        return (v is None) or (str(v).strip() == "") or pd.isna(v)
-    mask_no_coords = df_par_ec["_key"].isin(par_not_keys) & (
-        df_par_ec["lon"].map(_is_empty) | df_par_ec["lat"].map(_is_empty)
-    )
-    df_par_not_missing = df_par_ec.loc[mask_no_coords].copy()
-    df_par_not_missing.to_csv(
-        OUT_PAR_NOT_MISS_COORDS, index=False, sep=par_delim, encoding="utf-8-sig",
-        lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL
-    )
-
-    # ------------------------------------
-    # OSM_not_in_PARATEC.csv  (extra útil)
-    # ------------------------------------
-    osm_not_keys = set(df_osm_best["_key"]) - set(osm_to_par.keys())
-    df_osm_not = df_osm_best[df_osm_best["_key"].isin(osm_not_keys)].copy()
-
-    # columnas mínimas amigables si existen
-    cols_osm_min = []
-    for c in ["name", "lon", "lat", "voltage", "operator", "substation", "osm_ids", "osm_types"]:
-        if c in df_osm_not.columns:
-            cols_osm_min.append(c)
-    if not cols_osm_min:
-        cols_osm_min = [osm_name_col]
-        if "lon" in df_osm_not.columns and "lat" in df_osm_not.columns:
-            cols_osm_min += ["lon","lat"]
-
-    df_osm_not[cols_osm_min].to_csv(
-        OUT_OSM_NO_PAR, index=False, sep=osm_delim, encoding="utf-8-sig",
-        lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL
-    )
-
-    # ------------------------------------
-    # MATCHES_by_type.csv  +  MATCHES_summary.csv
-    # ------------------------------------
-    exact_count = len(exact_found)
-    fuzzy_count = int(accepted.sum())
-    unmatched_count = len(par_not_keys)
-
-    _df_bytype = pd.DataFrame([
-        {"type": "exact",           "count": exact_count},
-        {"type": "fuzzy_accepted",  "count": fuzzy_count},
-        {"type": "unmatched",       "count": unmatched_count},
-    ])
-    _df_bytype.to_csv(
-        OUT_MATCHES_BY_TYPE, index=False, sep=par_delim, encoding="utf-8-sig",
-        lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL
-    )
-
-    total_par = len(keys_par)
-    total_osm = len(keys_osm)
-    total_matched = exact_count + fuzzy_count
-    pct_par = 100.0 * total_matched / total_par if total_par else 0.0
-    pct_osm = 100.0 * len(set(osm_to_par.keys())) / total_osm if total_osm else 0.0
-
-    _df_summary = pd.DataFrame([{
-        "par_total_unique": total_par,
-        "osm_total_unique": total_osm,
-        "exact": exact_count,
-        "fuzzy_accepted": fuzzy_count,
-        "matched_total": total_matched,
-        "par_not_in_osm": unmatched_count,
-        "osm_not_in_par": len(osm_not_keys),
-        "pct_par_matched": round(pct_par, 1),
-        "pct_osm_covered": round(pct_osm, 1),
-    }])
-    _df_summary.to_csv(
-        OUT_MATCHES_SUMMARY, index=False, sep=par_delim, encoding="utf-8-sig",
-        lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL
-    )
-
-    # ------------------------------------
-    # Consola: resumen y porcentajes
-    # ------------------------------------
-    matched_par_keys = set(par_to_osm.keys())
-    matched_osm_keys = set(osm_to_par.keys())
-
+    # Console summary
     print("--- Summary ---")
-    print(f"PARATEC filas:                 {len(df_par)}")
-    print(f"PARATEC únicas por key:        {len(keys_par)}")
-    print(f"OSM filas (filtradas):         {len(df_osm)}")
-    print(f"OSM únicas por key:            {len(keys_osm)}")
-    print(f"Exact matches:                 {exact_count}")
-    print(f"Fuzzy aceptados (>= {FUZZY_THRESHOLD}): {fuzzy_count}")
-    print(f"PARATEC no en OSM:             {len(par_not_keys)} (ver {OUT_PAR_NOT_CSV})")
-    print(f"OSM no en PARATEC:             {len(osm_not_keys)} (ver {OUT_OSM_NO_PAR})")
-    print(f"Matched con XM (PARATEC):      {len(matched_par_keys)} / {len(keys_par)} ({pct_par:.1f}%)")
-    print(f"OSM cubierto por XM:           {len(matched_osm_keys)} / {len(keys_osm)} ({pct_osm:.1f}%)")
-    print(f"Salida enriquecida:            {OUT_ENR}")
+    print(f"PARATEC rows (raw):                {len(df_par_raw)}")
+    print(f"PARATEC unique by Nombre:          {len(df_par)}")
+    print(f"OSM rows (filtered):               {len(df_osm)}")
+    print(f"OSM unique by key:                 {len(df_osm_best)}")
+    print(f"Matched (total):                   {len(matched_osm_keys)}")
+    print(f"Not in OSM (total):                {len(par_not)}")
 
 if __name__ == "__main__":
     main()
