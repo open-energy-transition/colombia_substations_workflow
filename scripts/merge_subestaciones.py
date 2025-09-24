@@ -29,7 +29,7 @@ from collections import defaultdict
 from matching_utils import (
     FUZZY_THRESHOLD, HAS_RAPIDFUZZ,
     strip_accents, normalize_core, tokenize,
-    normalized_key,  # strict key (backward-compatible with your pipeline)
+    normalized_key, 
     build_blocks, candidate_set, score_pair,
 )
 
