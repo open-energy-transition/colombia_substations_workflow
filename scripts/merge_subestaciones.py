@@ -250,7 +250,7 @@ def main():
 
 
     if not HAS_RAPIDFUZZ:
-    print("[WARN] rapidfuzz no está instalado; usando fallback con difflib. "
+        print("[WARN] rapidfuzz no está instalado; usando fallback con difflib. "
           "Recomendado: pip install rapidfuzz para mayor precisión y rendimiento.")
     
 
