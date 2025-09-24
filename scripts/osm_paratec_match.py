@@ -359,7 +359,7 @@ def main():
     pct_par = 100.0 * len(matched_osm_keys) / len(df_par) if len(df_par) > 0 else 0.0
     print(f"Matched with XM (PARATEC):         {len(matched_osm_keys)} / {len(df_par)} ({pct_par:.1f}%)")
 
-    # New perspective: how many OSM uniques are not covered by XM
+    #how many OSM uniques are not covered by XM
     print(f"OSM not in XM (total):             {len(osm_not)}")
     pct_osm_covered = 100.0 * (len(df_osm_best) - len(osm_not)) / len(df_osm_best) if len(df_osm_best) > 0 else 0.0
     print(f"OSM covered by XM:                 {len(df_osm_best) - len(osm_not)} / {len(df_osm_best)} ({pct_osm_covered:.1f}%)")
