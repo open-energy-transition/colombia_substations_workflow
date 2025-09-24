@@ -312,6 +312,11 @@ def main():
     print(f"Wrote {OUT_MATCH_SUM}")
 
     # Console summary
+    matched_par = set(par_to_osm.keys())
+    matched_osm = set(osm_to_par.keys())
+    total_par = len(set(df_par["_key"]))
+    total_osm = len(set(df_osm_best["_key"]))
+
     print("--- Summary ---")
     print(f"PARATEC rows (raw):                {len(df_par_raw)}")
     print(f"PARATEC unique by Nombre:          {len(df_par)}")
@@ -322,8 +327,7 @@ def main():
 
     pct_par = 100.0 * len(matched_par) / max(1, total_par)
     pct_osm = 100.0 * len(matched_osm) / max(1, total_osm)
-
-    print(f"OSM Matched with XM (PARATEC): {len(matched_par)} / {total_par} = {pct_par:.1f}%")
+    print(f"Matched with XM (PARATEC): {len(matched_par)} / {total_par} = {pct_par:.1f}%")
     print(f"OSM covered by XM:         {len(matched_osm)} / {total_osm} = {pct_osm:.1f}%")
 
     # ---------- OSM not in PARATEC ----------
