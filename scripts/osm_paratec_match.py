@@ -271,7 +271,7 @@ def main():
         json.dump({"type":"FeatureCollection","features":feats2}, f, ensure_ascii=False, indent=2)
     print(f"[OK] Wrote {OUT_OSM_NOT_GJ} ({len(feats2)} points)")
 
-    # -------- Console summary (TAL CUAL lo querías) --------
+    # -------- Console summary--------
     print("--- Summary ---")
     print(f"PARATEC rows (raw):                {len(df_par_raw)}")
     print(f"PARATEC unique by Nombre:          {len(df_par)}")
