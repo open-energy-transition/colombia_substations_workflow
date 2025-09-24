@@ -320,6 +320,12 @@ def main():
     print(f"Matched (total):                   {len(matched_osm_keys)}")
     print(f"Not in OSM (total):                {len(par_not)}")
 
+    pct_par = 100.0 * len(matched_par) / max(1, total_par)
+    pct_osm = 100.0 * len(matched_osm) / max(1, total_osm)
+
+    print(f"OSM Matched with XM (PARATEC): {len(matched_par)} / {total_par} = {pct_par:.1f}%")
+    print(f"OSM covered by XM:         {len(matched_osm)} / {total_osm} = {pct_osm:.1f}%")
+
     # ---------- OSM not in PARATEC ----------
     osm_not = df_osm_best[~df_osm_best["_key"].isin(osm_to_par.keys())].copy()
     # keep only main attributes
@@ -327,7 +333,7 @@ def main():
     osm_not = osm_not[cols_keep]
     to_csv_like_source(osm_not, OUT_OSM_ONLY, osm_delim, osm_enc, osm_eol)
     print(f"Wrote {OUT_OSM_ONLY}")
-    
+
 
 if __name__ == "__main__":
     main()
