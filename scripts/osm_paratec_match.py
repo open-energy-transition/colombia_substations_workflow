@@ -94,9 +94,9 @@ def to_csv_like_source(df: pd.DataFrame, path: str, delim: str, enc: str, eol: s
 # ------------- NormalizaciÃ³n / tokenizaciÃ³n -------------
 
 _ROMAN_MAP = {"i":"1","ii":"2","iii":"3","iv":"4","v":"5","vi":"6","vii":"7","viii":"8","ix":"9","x":"10"}
-_STOPWORDS = {"subestacion","subestaciÃ³n","se","s/e","estacion","estaciÃ³n","san","santo","santa","sta","sto","sa",
+_STOPWORDS = {"subestacion","subestación","se","s/e","estacion","estación","san","santo","santa","sta","sto","sa",
               "calle","cll","av","avenida","norte","sur","este","oeste","oriente","occidente","de","del","la","el",
-              "eeb","eeeb","bogota","bogotÃ¡"}
+              "eeb","eeeb","bogota","bogotá","Substation","sub-estacion",""}
 
 def strip_accents(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", str(s)) if unicodedata.category(c) != "Mn")
