@@ -6,6 +6,18 @@ from collections import defaultdict
 import pandas as pd
 import numpy as np
 
+try:
+    from rapidfuzz import fuzz
+    try:
+        from rapidfuzz.distance import JaroWinkler as RF_JW
+    except Exception:
+        RF_JW = None
+    HAS_RAPIDFUZZ = True
+except Exception:
+    fuzz = None
+    RF_JW = None
+    HAS_RAPIDFUZZ = False
+
 # ---------------- Config ----------------
 PARA_CSV = "PARATEC_with_coords.csv"
 OSM_CSV  = "osm_substations_filtered.csv"
@@ -152,30 +164,33 @@ def candidate_set(k, toks, by_initial, by_lenband, token_index):
 def score_pair(a_key, a_tokens, b_key, b_tokens, rf=None):
     sa, sb = set(a_tokens), set(b_tokens)
     jacc = 100.0 * (len(sa & sb) / max(1, len(sa | sb)))
-    if rf is not None:
-        from rapidfuzz import fuzz
+
+    if HAS_RAPIDFUZZ and fuzz is not None:
         tset  = fuzz.token_set_ratio(a_key, b_key)
         tsort = fuzz.token_sort_ratio(a_key, b_key)
         part  = fuzz.partial_ratio(a_key, b_key)
-        try:
-            from rapidfuzz.distance import JaroWinkler
-            jw = 100.0 * JaroWinkler.normalized_similarity(a_key, b_key)
-        except Exception:
-            jw = 0.0
+        jw    = 100.0 * RF_JW.normalized_similarity(a_key, b_key) if RF_JW else 0.0
     else:
+        # Fallback robusto: comparar cadenas construidas a partir de tokens ORDENADOS
         import difflib
-        ratio = 100.0 * difflib.SequenceMatcher(None, a_key, b_key).ratio()
-        tset = tsort = part = ratio; jw = 0.0
+        a_tok = " ".join(sorted(a_tokens))
+        b_tok = " ".join(sorted(b_tokens))
+        ratio = 100.0 * difflib.SequenceMatcher(None, a_tok, b_tok).ratio()
+        tset = tsort = part = ratio
+        jw   = 0.0
+
     return 0.35*tset + 0.25*tsort + 0.15*part + 0.15*jacc + 0.10*jw
 
 def best_match_for(key, toks, osm_keys_tokens, blocks, rf=None):
     by_initial, by_lenband, token_index = blocks
     cands = candidate_set(key, toks, by_initial, by_lenband, token_index)
-    if not cands: return None, 0.0
+    if not cands: 
+        return None, 0.0
     best_k, best_s = None, -1.0
     for ck in cands:
-        s = score_pair(key, toks, ck, osm_keys_tokens[ck], rf)
-        if s > best_s: best_s, best_k = s, ck
+        s = score_pair(key, toks, ck, osm_keys_tokens[ck])
+        if s > best_s:
+            best_s, best_k = s, ck
     return best_k, best_s
 
 def to_float(x):
@@ -234,16 +249,15 @@ def main():
 
     osm_keys_tokens = {k: toks for k, toks in df_osm_best[["_key","_tokens"]].itertuples(index=False)}
     blocks = build_blocks(osm_keys_tokens)
-    try:
-        import rapidfuzz as rf  # noqa: F401
-        rf_mod = rf
-    except Exception:
-        rf_mod = None
+
+    if not HAS_RAPIDFUZZ:
+        print("[WARN] rapidfuzz no está instalado; usando fallback con difflib. "
+          "Recomendado: pip install rapidfuzz para mayor precisión y rendimiento.")
 
     df_par_missing = df_par[df_par["_key"].isin(exact_missing)].copy()
     best_keys, best_scores = [], []
     for k, toks in df_par_missing[["_key","_tokens"]].itertuples(index=False):
-        bk, sc = best_match_for(k, toks, osm_keys_tokens, blocks, rf_mod)
+        bk, sc = best_match_for(k, toks, osm_keys_tokens, blocks)
         best_keys.append(bk); best_scores.append(sc)
     df_par_missing["best_osm_key"] = best_keys
     df_par_missing["best_score"]   = best_scores
