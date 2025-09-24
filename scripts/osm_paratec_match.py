@@ -93,7 +93,7 @@ def to_csv_like_source(df: pd.DataFrame, path: str, delim: str, enc: str, eol: s
 # ------------- Normalización / tokenización -------------
 
 _ROMAN_MAP = {"i":"1","ii":"2","iii":"3","iv":"4","v":"5","vi":"6","vii":"7","viii":"8","ix":"9","x":"10"}
-_STOPWORDS = {"subestacion","subestación","se","s/e","estacion","estación","san","santo","santa","sta","sto","sa",
+_STOPWORDS = {"subestacion","subestación","subestación","se","s/e","estacion","estación","san","santo","santa","sta","sto","sa",
               "calle","cll","av","avenida","norte","sur","este","oeste","oriente","occidente","de","del","la","el",
               "eeb","eeeb","bogota","bogotá"}
 
@@ -122,11 +122,16 @@ def tokenize(name: str):
     return [t for t in out if t not in _STOPWORDS and (len(t)>1 or t.isdigit())]
 
 def normalized_key(name: str) -> str:
-    core = normalize_core(name)
-    core = re.sub(r"[^a-z0-9]+", "", core)
-    for r,a in _ROMAN_MAP.items():
-        core = re.sub(rf"{r}(?![a-z0-9])", a, core)
-    return core
+    core = normalize_core(name)  #lowercases, strips (..), and removes "... kV"
+    # Drop domain stopwords at the KEY level too (not only in tokenize)
+    words = [w for w in core.split() if w not in _STOPWORDS]
+    core2 = "".join(words)  # collapse without spaces for stable key
+    # Roman → Arabic post-process on the collapsed key
+    for r, a in _ROMAN_MAP.items():
+        core2 = re.sub(rf"{r}(?![a-z0-9])", a, core2)
+    # keep only alphanumerics
+    core2 = re.sub(r"[^a-z0-9]+", "", core2)
+    return core2
 
 # ------------- Matching helpers -------------
 
