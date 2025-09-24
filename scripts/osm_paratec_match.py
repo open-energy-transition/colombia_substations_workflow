@@ -15,13 +15,13 @@ FUZZY_THRESHOLD = 70
 # Outputs (los que ya estaban bien se mantienen)
 OUT_PAR_ENR   = "PARATEC_enriched_coords.csv"
 OUT_PAR_GJ    = "PARATEC_not_in_OSM.geojson"
-OUT_PAR_MISS  = "PARATEC_not_in_OSM_missing_coords.csv"   # se sigue generando
-OUT_MATCH_SUM = "MATCHES_summary.csv"                     # se mantiene
-
-# NUEVOS (reemplazan 11–14)
-OUT_OSM_ENR_MIN = "OSM_PARATEC_enriched.csv"              # (11)
-OUT_PAR_NOT_CSV = "PARATEC_not_in_OSM.csv"                # (12, CSV compañero del GeoJSON)
-OUT_MATCH_TYPE  = "MATCHES_by_type.csv"                   # (13, resumen mínimo)
+OUT_PAR_MISS  = "PARATEC_not_in_OSM_missing_coords.csv"   
+OUT_MATCH_SUM = "MATCHES_summary.csv"                     
+OUT_OSM_ENR_MIN = "OSM_PARATEC_enriched.csv"              
+OUT_PAR_NOT_CSV = "PARATEC_not_in_OSM.csv"                
+OUT_MATCH_TYPE  = "MATCHES_by_type.csv"                   
+OUT_OSM_ONLY = "OSM_not_in_PARATEC.csv"
+OUT_OSM_ONLY = "OSM_not_in_PARATEC.csv"
 
 # ------------- CSV I/O utils -------------
 
@@ -319,6 +319,15 @@ def main():
     print(f"OSM unique by key:                 {len(df_osm_best)}")
     print(f"Matched (total):                   {len(matched_osm_keys)}")
     print(f"Not in OSM (total):                {len(par_not)}")
+
+    # ---------- OSM not in PARATEC ----------
+    osm_not = df_osm_best[~df_osm_best["_key"].isin(osm_to_par.keys())].copy()
+    # keep only main attributes
+    cols_keep = ["name", "lon", "lat"] + [c for c in df_osm_best.columns if c not in ["_key","_tokens"]]
+    osm_not = osm_not[cols_keep]
+    to_csv_like_source(osm_not, OUT_OSM_ONLY, osm_delim, osm_enc, osm_eol)
+    print(f"Wrote {OUT_OSM_ONLY}")
+    
 
 if __name__ == "__main__":
     main()
