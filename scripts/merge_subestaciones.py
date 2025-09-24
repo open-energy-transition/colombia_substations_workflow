@@ -12,7 +12,7 @@ Generates:
 Features:
   - Robust reading (auto-detects encoding and delimiter; cleans BOM/Unnamed).
   - Aggressive normalization and tokenization with Roman/Arabic numerals and domain stopwords.
-  - Exact + fuzzy matching (rapidfuzz if available; difflib as fallback).
+  - Exact + fuzzy matching (RapidFuzz if available; difflib fallback on token-sorted strings).
   - UPME deduplication prioritizing rows with valid lon/lat.
   - Outputs with the same delimiter as PARATEC and UTF-8 with BOM.
   - ASCII-safe prints for Windows console.
@@ -21,22 +21,17 @@ Features:
 import sys
 import csv
 import re
-import unicodedata
 import pandas as pd
 import numpy as np
 from collections import defaultdict
 
-try:
-    from rapidfuzz import fuzz
-    try:
-        from rapidfuzz.distance import JaroWinkler as RF_JW
-    except Exception:
-        RF_JW = None
-    HAS_RAPIDFUZZ = True
-except Exception:
-    fuzz = None
-    RF_JW = None
-    HAS_RAPIDFUZZ = False
+# --- Shared matching utilities (centralized) ---
+from matching_utils import (
+    FUZZY_THRESHOLD, HAS_RAPIDFUZZ,
+    strip_accents, normalize_core, tokenize,
+    normalized_key,  # strict key (backward-compatible with your pipeline)
+    build_blocks, candidate_set, score_pair,
+)
 
 # -----------------------------
 # Configuración
@@ -46,8 +41,6 @@ UPME_CSV = "subestaciones_upme.csv"
 OUT_ENR  = "PARATEC_with_coords.csv"
 OUT_UNM  = "PARATEC_unmatched_in_UPME.csv"
 OUT_FZY  = "PARATEC_fuzzy_matches.csv"
-
-FUZZY_THRESHOLD = 63
 
 # Columnas preferidas (si existen en PARATEC) para incluir en el reporte de no encontrados
 PAR_COLS_REPORT_PREF = [
@@ -95,110 +88,28 @@ def read_csv_smart(path: str):
     return df, enc, delim
 
 # -----------------------------
-# Normalización y tokenización
+# Scoring y matching (envolturas locales mínimas)
 # -----------------------------
-_ROMAN_MAP = {
-    "i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5",
-    "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10",
-}
-_STOPWORDS = {
-    "subestacion","subestación","se","s/e","estacion","estación",
-    "san","santo","santa","sta","sto","sa","calle","cll","av","avenida",
-    "norte","sur","este","oeste","oriente","occidente","de","del","la","el",
-    "eeb","eeeb","bogota","bogotá"
-}
+def build_blocks_local(keys_tokens: dict):
+    """Envoltura por compatibilidad: reutiliza build_blocks del utils."""
+    return build_blocks(keys_tokens)
 
-def strip_accents(s: str) -> str:
-    return "".join(c for c in unicodedata.normalize("NFD", str(s)) if unicodedata.category(c) != "Mn")
+def candidate_set_local(k, toks, by_initial, by_lenband, token_index):
+    """Envoltura por compatibilidad: reutiliza candidate_set del utils."""
+    return candidate_set(k, toks, by_initial, by_lenband, token_index)
 
-def normalize_core(name: str) -> str:
-    if not isinstance(name, str):
-        return ""
-    s = strip_accents(name).lower().strip()
-    s = re.sub(r"\(.*?\)", "", s)                     # quita alias (... )
-    s = re.sub(r"\b\d+(\.\d+)?\s*kv\b", "", s)        # quita "115 kV"
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+def score_pair_local(a_key, a_tokens, b_key, b_tokens):
+    """Envoltura por compatibilidad: reutiliza score_pair del utils."""
+    return score_pair(a_key, a_tokens, b_key, b_tokens)
 
-def roman_to_arabic_token(tok: str) -> str:
-    return _ROMAN_MAP.get(tok, tok)
-
-def arabic_to_roman_token(tok: str) -> str:
-    inv = {v: k for k, v in _ROMAN_MAP.items()}
-    return inv.get(tok, tok)
-
-def tokenize(name: str):
-    s = re.sub(r"[^a-z0-9\s]+", " ", name)
-    toks = [t for t in s.split() if t]
-    out = []
-    for t in toks:
-        t1 = roman_to_arabic_token(t); out.append(t1)
-        t2 = arabic_to_roman_token(t1)
-        if t2 != t1: out.append(t2)
-    out = [t for t in out if t not in _STOPWORDS and (len(t) > 1 or t.isdigit())]
-    return out
-
-def normalized_key(name: str) -> str:
-    core = normalize_core(name)
-    core = re.sub(r"[^a-z0-9]+", "", core)
-    for r, a in _ROMAN_MAP.items():
-        core = re.sub(rf"{r}(?![a-z0-9])", a, core)
-    return core
-
-# -----------------------------
-# Scoring y matching
-# -----------------------------
-def build_blocks(keys_tokens: dict):
-    by_initial = defaultdict(set)
-    by_lenband = defaultdict(set)
-    token_index = defaultdict(set)
-    for k, toks in keys_tokens.items():
-        if not k: continue
-        by_initial[k[0]].add(k)
-        by_lenband[len(k)//3].add(k)
-        for t in set(toks):
-            token_index[t].add(k)
-    return by_initial, by_lenband, token_index
-
-def candidate_set(k, toks, by_initial, by_lenband, token_index):
-    cands = set()
-    if k:
-        cands |= by_initial.get(k[0], set())
-        cands |= by_lenband.get(len(k)//3, set())
-    for t in set(toks):
-        cands |= token_index.get(t, set())
-    return list(cands)
-
-def score_pair(a_key, a_tokens, b_key, b_tokens, rf=None):
-    sa, sb = set(a_tokens), set(b_tokens)
-    jacc = 100.0 * (len(sa & sb) / len(sa | sb)) if (sa or sb) else 0.0
-    tset = tsort = part = 0.0; jw = 0.0
-
-    #RapidFuzz importado a nivel módulo
-    if HAS_RAPIDFUZZ and fuzz is not None:
-        tset  = fuzz.token_set_ratio(a_key, b_key)
-        tsort = fuzz.token_sort_ratio(a_key, b_key)
-        part  = fuzz.partial_ratio(a_key, b_key)
-        jw    = 100.0 * RF_JW.normalized_similarity(a_key, b_key) if RF_JW else 0.0
-    else:
-        # Fallback  sin RapidFuzz: comparar sobre tokens ORDENADOS
-        import difflib
-        a_tok = " ".join(sorted(a_tokens))
-        b_tok = " ".join(sorted(b_tokens))
-        ratio = 100.0 * difflib.SequenceMatcher(None, a_tok, b_tok).ratio()
-        tset = tsort = part = ratio
-        jw   = 0.0
-
-    return 0.35*tset + 0.25*tsort + 0.15*part + 0.15*jacc + 0.10*jw
-
-def best_match_for(key, toks, upme_keys_tokens, blocks, rf=None):
+def best_match_for(key, toks, upme_keys_tokens, blocks):
     by_initial, by_lenband, token_index = blocks
-    cands = candidate_set(key, toks, by_initial, by_lenband, token_index)
+    cands = candidate_set_local(key, toks, by_initial, by_lenband, token_index)
     if not cands:
         return None, 0.0
     best_k, best_s = None, -1.0
     for ck in cands:
-        s = score_pair(key, toks, ck, upme_keys_tokens[ck])
+        s = score_pair_local(key, toks, ck, upme_keys_tokens[ck])
         if s > best_s:
             best_s, best_k = s, ck
     return best_k, best_s
@@ -207,10 +118,13 @@ def best_match_for(key, toks, upme_keys_tokens, blocks, rf=None):
 # Auxiliares
 # -----------------------------
 def to_float(x):
-    if x is None or x == "": return np.nan
+    if x is None or x == "":
+        return np.nan
     s = str(x).strip().replace(",", ".")
-    try: return float(s)
-    except ValueError: return np.nan
+    try:
+        return float(s)
+    except ValueError:
+        return np.nan
 
 # -----------------------------
 # Pipeline
@@ -246,13 +160,11 @@ def main():
 
     # Índices para fuzzy
     upme_keys_tokens = {k: toks for k, toks in df_upm_best[["_key","_tokens"]].itertuples(index=False)}
-    blocks = build_blocks(upme_keys_tokens)
-
+    blocks = build_blocks_local(upme_keys_tokens)
 
     if not HAS_RAPIDFUZZ:
-        print("[WARN] rapidfuzz no está instalado; usando fallback con difflib. "
-          "Recomendado: pip install rapidfuzz para mayor precisión y rendimiento.")
-    
+        print("[WARN] rapidfuzz no está instalado; usando fallback con difflib "
+              "(comparación sobre tokens ordenados). Recomendado: pip install rapidfuzz")
 
     # Fuzzy para los faltantes
     df_par_missing = df_par[df_par["_key"].isin(exact_missing)].copy()
@@ -276,7 +188,7 @@ def main():
     # Exactos
     df_par_enr["lon"] = df_par_enr["_key"].map(lambda k: coord_map.get(k, {}).get("lon"))
     df_par_enr["lat"] = df_par_enr["_key"].map(lambda k: coord_map.get(k, {}).get("lat"))
-    # Fuzzy aceptados
+    # Fuzzy aceptados (solo rellena donde haga falta)
     acc_map = dict(zip(df_par_missing.loc[accepted, "_key"], df_par_missing.loc[accepted, "best_upme_key"]))
     idxs = df_par_enr["_key"].isin(acc_map.keys())
     if idxs.any():
