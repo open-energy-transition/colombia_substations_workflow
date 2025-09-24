@@ -100,8 +100,8 @@ def strip_accents(s: str) -> str:
 def normalize_core(name: str) -> str:
     if not isinstance(name, str): return ""
     s = strip_accents(name).lower().strip()
-    s = re.sub(r"\(.*?\)", "", s)
-    s = re.sub(r"\b\d+(\.\d+)?\s*kv\b", "", s)
+    s = re.sub(r"\(.*?\)", "", s) # removes aliases in parentheses
+    s = re.sub(r"\b\d+(\.\d+)?\s*kv\b", "", s) #removes "115 kV", "34.5kv", etc.
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -327,6 +327,9 @@ def main():
     print(f"OSM unique by key:                 {len(df_osm_best)}")
     print(f"Matched (total):                   {len(matched_osm_keys)}")
     print(f"Not in OSM (total):                {len(par_not)}")
+
+    pct = 100.0 * len(matched_osm_keys) / len(df_par) if len(df_par) > 0 else 0.0
+    print(f"OSM Substation matched with XM-UPME dataset:         {len(matched_osm_keys)} / {len(df_par)} ({pct:.1f}%)")
 
 if __name__ == "__main__":
     main()
