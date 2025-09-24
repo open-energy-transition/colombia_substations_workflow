@@ -237,14 +237,14 @@ def fase2_dedup(features):
     df_to_geojson(voltage_no_name, "osm_substations_voltage_no_name.geojson")
     print(f"GeoJSON saved (voltage without name): {len(voltage_no_name)} features")
 
-    # Final filter: keep only BOTH name and voltage
-    df_filtered = df[has_name & has_voltage].copy()
+    # Final filter: keep only entries that have a NAME (voltage optional)
+    df_filtered = df[has_name].copy()
     filtered_csv = "osm_substations_filtered.csv"
     df_filtered.to_csv(filtered_csv, index=False, encoding="utf-8-sig")
-    print(f"Final CSV (only BOTH name AND voltage) saved: {filtered_csv} ({len(df_filtered)} rows)")
+    print(f"Final CSV (Name present in OSM data) saved: {filtered_csv} ({len(df_filtered)} rows)")
 
     # Debug dump of dropped rows
-    dropped_mask = ~(has_name & has_voltage)
+    dropped_mask = ~(has_name)
     debug_bad = df[dropped_mask]
     if not debug_bad.empty:
         debug_csv = "osm_substations_dropped_debug.csv"
