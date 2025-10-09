@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Folium map of substations (from OSM_PARATEC_enriched.csv) and OSM power lines in Colombia.
+Folium map of substations (from PARATEC_enriched_with_OSMcoords_with_location.csv) and OSM power lines in Colombia.
 
 - Substations are from CSV (lat/lon, Nombre, voltage, SC capacity, connected lines).
 - Power lines are fetched from OSM with 'out body; >; out skel qt;'.
@@ -23,9 +23,18 @@ import requests
 import folium
 from branca.element import MacroElement, Template
 
-CSV_NAME = "OSM_PARATEC_enriched.csv"
+# ---------------- CLI ----------------
+import argparse
+def parse_args():
+    p = argparse.ArgumentParser(description="Plot Folium map from curated CSV (paths as args).")
+    p.add_argument("--in", dest="csv_in", help="Path to PARATEC_enriched_with_OSMcoords_with_location.csv")
+    p.add_argument("--out", dest="out_html", help="Path to output HTML map")
+    return p.parse_args()
+
+# ---------------- Defaults ----------------
+CSV_NAME = "PARATEC_enriched_with_OSMcoords_with_location.csv"
 OUTPUT_HTML = "paratec_map.html"
-COUNTRY_ALPHA2 = "CO"
+COUNTRY_ALPHA2 = "CO"  # default 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 # Fixed vivid colors for common voltage levels (kV) to ensure consistency between runs
@@ -152,8 +161,10 @@ out skel qt;
     return r.json()
 
 def main():
+    args = parse_args()
+
     # ---------------- Substations ----------------
-    df = pd.read_csv(CSV_NAME, dtype=str, encoding="utf-8")
+    df = pd.read_csv(args.csv_in or CSV_NAME, dtype=str, encoding="utf-8-sig", sep=";")
     df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
     df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
 
@@ -166,7 +177,7 @@ def main():
         if col not in df.columns:
             raise SystemExit(f"CSV must contain column '{col}'")
 
-    # Drop rows without coordinates
+    # Drop rows without coordinates (redundant but retained for robustness)
     df = df.dropna(subset=["lat", "lon"]).copy()
 
     # Extract numeric kV for each substation
@@ -243,8 +254,8 @@ def main():
         ).add_to(fmap)
 
     add_legend(fmap, voltage_colors)
-    fmap.save(OUTPUT_HTML)
-    print(f"Saved map to {OUTPUT_HTML}")
+    fmap.save(args.out_html or OUTPUT_HTML)
+    print(f"Saved map to {args.out_html or OUTPUT_HTML}")
 
 if __name__ == "__main__":
     main()

@@ -1,229 +1,238 @@
 # Colombia Substations Workflow
 
-End-to-end, reproducible pipeline to ingest, clean, enrich, merge, and match substation datasets from **XM (PARATEC)**, **UPME**, and **OSM**, and produce an **interactive map**.
+End-to-end, reproducible pipeline to ingest, clean, enrich, match and visualize **substations** from **XM (PARATEC)**, **UPME**, and **OSM**, producing a final **interactive map**.
 
-The workflow is orchestrated with **Snakemake**, is **cross-platform** (Windows/Linux/macOS), and writes artifacts into **per-stage output folders**.
-
----
-
-## Features
-
-- Single source input: `data/PARATEC_Subestaciones30-08-2025.xlsx` (needs to be downloaded first from https://paratec.xm.com.co/reportes/subestaciones)
-- Deterministic DAG with Snakemake (`Snakefile` + `pipeline.smk.yaml`)
-- Per-stage outputs: `outputs/osm`, `outputs/xm`, `outputs/upme`, `outputs/merge`, `outputs/match`, `outputs/map`
-- CSV/GeoJSON artifacts for GIS + QA
-- Final **interactive HTML map** for exploration
+- Cross‑platform (Windows / macOS / Linux) — uses Python-based Snakemake rules (no bash needed on Windows).
+- Clean folder layout: `data/`, `scripts/`, `outputs/<step>/...`.
+- No duplication of inputs between steps — scripts receive absolute paths via CLI (for steps 5–8).
 
 ---
 
-## Project structure
+## 📁 Project layout
 
 ```
-colombia_substations_workflow/
+.
 ├─ Snakefile
-├─ pipeline.smk.yaml
+├─ config.yaml
+├─ data/
+│  └─ PARATEC_Subestaciones30-08-2025.xlsx     # your downloaded Excel (required)
 ├─ scripts/
-│  ├─ get_osm_subs.py
-│  ├─ clean_paratec_subestaciones.py
-│  ├─ get_subs_upme.py
-│  ├─ merge_subestaciones.py
-│  ├─ osm_paratec_match.py
-│  └─ plot_map.py
-└─ data/
-   └─ PARATEC_Subestaciones30-08-2025.xlsx
+│  ├─ get_osm_subs_improved.py                  # step 1 (country set inside script)
+│  ├─ clean_paratec_subestaciones.py            # step 2
+│  ├─ get_subs_xm_dashboard.py                  # step 3
+│  ├─ get_subs_upme.py                          # step 4
+│  ├─ xm_upme_union_cli.py                      # step 5 
+│  ├─ enrich_xm_with_coords_cli.py              # step 6 
+│  ├─ osm_xmparatec_cli.py                      # step 7 
+│  ├─ plot_map_cli.py                           # step 8 
+│  └─ matching_utils.py                         # shared helpers 
+└─ outputs/
+   ├─ 01_osm/
+   ├─ 02_paratec_clean/
+   ├─ 03_xm_dashboard/
+   ├─ 04_upme/
+   ├─ 05_xm_upme_union/
+   ├─ 06_enrich_xm/
+   ├─ 07_osm_xmparatec/
+   └─ 08_plot/
 ```
 
-Outputs are written under:
+> The `outputs/` subfolders are created automatically by Snakemake on first run.
 
-```
-outputs/
-├─ osm/
-├─ xm/
-├─ upme/
-├─ merge/
-├─ match/
-└─ map/
+---
+
+## ⚙️ Requirements
+
+- **Python** 3.9+ (tested with 3.11)
+- **Snakemake** (`pip install snakemake`)
+- Script deps: `pandas`, `requests`, `rapidfuzz` (if you use it in your utils), `folium`, `branca`
+
+Optional (recommended):
+```bash
+python -m venv .venv
+# Windows PowerShell
+. .venv/Scripts/Activate.ps1
+# macOS/Linux
+source .venv/bin/activate
+pip install -r requirements.txt   # create one if you like
 ```
 
 ---
 
-## Prerequisites
-
-- Python 3.9+ (tested with 3.11)
-- Snakemake (e.g., `pip install snakemake`)
-- Libraries used by the scripts: `pandas`, `numpy`, `requests`, `rapidfuzz` (optional), `folium`/`branca`
-
-> Tip: create a virtualenv and install your deps with `pip install -r requirements.txt` (optional).
-
----
-
-## Quick start
-
-1. Place the XM Excel at:
-   ```
-   data/PARATEC_Subestaciones30-08-2025.xlsx
-   ```
-2. Run the full pipeline:
-   ```bash
-   snakemake -j 4
-   ```
-3. Open the final interactive map:
-   ```
-   outputs/map/paratec_map.html
-   ```
-
-> Cross-platform: the `Snakefile` uses Python `run:` blocks, so no Bash is required on Windows.
-
----
-
-## Configuration
-
-All paths are controlled in `pipeline.smk.yaml`:
+## 🧰 Configuration (`config.yaml`)
 
 ```yaml
-workdir: "."
+dirs:
+  data: "data"
+  scripts: "scripts"
+  outputs: "outputs"
+
+steps:
+  osm: "01_osm"
+  paratec_clean: "02_paratec_clean"
+  xm_dashboard: "03_xm_dashboard"
+  upme: "04_upme"
+  xm_upme_union: "05_xm_upme_union"
+  enrich_xm: "06_enrich_xm"
+  osm_xmparatec: "07_osm_xmparatec"
+  plot: "08_plot"
 
 scripts:
-  get_osm_subs: "scripts/get_osm_subs.py"
-  clean_paratec_subestaciones: "scripts/clean_paratec_subestaciones.py"
-  get_subs_upme: "scripts/get_subs_upme.py"
-  merge_subestaciones: "scripts/merge_subestaciones.py"
-  osm_paratec_match: "scripts/osm_paratec_match.py"
-  plot_map: "scripts/plot_map.py"
+  osm: "get_osm_subs_improved.py"
+  clean_paratec: "clean_paratec_subestaciones.py"
+  xm_dashboard: "get_subs_xm_dashboard.py"
+  upme: "get_subs_upme.py"
+  xm_upme_union: "xm_upme_union.py"           
+  enrich_xm_with_coords: "enrich_xm_with_coords.py"  
+  osm_xmparatec: "osm_xmparatec.py"                  
+  plot_map: "plot_map.py"                            
+  utils: "matching_utils.py"
 
-xm_excel:
-  path: "data/PARATEC_Subestaciones30-08-2025.xlsx"
-  expected_name: "PARATEC_Subestaciones30-08-2025.xlsx"
+files:
+  osm:
+    raw: "osm_substations_raw.csv"
+    filtered: "osm_substations_filtered.csv"
+    dropped: "osm_substations_dropped_debug.csv"
+    dedup: "osm_substations_dedup.csv"
+  paratec_clean:
+    csv: "PARATEC_substations.csv"
+  xm_dashboard:
+    markers: "getMarkers.csv"
+    lines: "getLines.csv"
+  upme:
+    geojson: "subestaciones_upme.geojson"
+    csv: "subestaciones_upme.csv"
+  xm_upme_union:
+    enriched_xm: "XM_enriched_with_UPME_coords.csv"
+  enrich_xm:
+    paratec_enriched_xm: "PARATEC_enriched_with_XMcoords.csv"
+  osm_xmparatec:
+    paratec_enriched_osm: "PARATEC_enriched_with_OSMcoords_with_location.csv"
+    osm_unmatched: "OSM_unmatched_sites.csv"
+  plot:
+    html: "paratec_map.html"
 
-stage_dirs:
-  osm:   "outputs/osm"
-  xm:    "outputs/xm"
-  upme:  "outputs/upme"
-  merge: "outputs/merge"
-  match: "outputs/match"
-  map:   "outputs/map"
+inputs:
+  paratec_xlsx: "PARATEC_Subestaciones30-08-2025.xlsx"
 
-# optional: pin a specific interpreter
-# python: "/usr/bin/python3"
 ```
 
-If you relocate scripts or rename the Excel, update this YAML only.
+---
+
+## ▶️ Running
+
+**1) Put the Excel in `data/`:**
+```
+data/PARATEC_Subestaciones30-08-2025.xlsx
+```
+
+**2) Run the full workflow:**
+```bash
+snakemake -j 4
+```
+
+**3) Open the final map:**
+```
+outputs/08_plot/paratec_map.html
+```
+
 
 ---
 
-## Workflow stages
+## 🧱 Workflow stages
 
-Stages run **inside their own output folder**, so each script’s relative I/O lands neatly per stage.
+Each stage runs in its own output folder and writes its own artifacts there.
 
-### 1) OSM pull & filter → `outputs/osm/`
-**Script:** `scripts/get_osm_subs.py`  
-**Inputs:** _none_ (fetches from OSM/Overpass or configured source)  
+### 1) OSM pull & dedup → `outputs/01_osm/`
+**Script:** `scripts/get_osm_subs_improved.py`  
+**Inputs:** none (Overpass)  
 **Outputs:**
-- `osm_substations_filtered.csv` (main)
-- `osm_substations_named_no_voltage.geojson` (QA)
-- `osm_substations_voltage_no_name.geojson` (QA)
+- `osm_substations_dedup.csv` (main, location‑based dedup)
+- `osm_substations_filtered.csv` (named only, post‑dedup)
+- `osm_substations_raw.csv`, `osm_substations_dropped_debug.csv`
 
----
-
-### 2) XM (PARATEC) clean → `outputs/xm/`
+### 2) Clean PARATEC Excel → `outputs/02_paratec_clean/`
 **Script:** `scripts/clean_paratec_subestaciones.py`  
-**Inputs:**  
-- `PARATEC_Subestaciones30-08-2025.xlsx` (copied into the stage folder under the expected filename)
+**Input:** `data/PARATEC_Subestaciones30-08-2025.xlsx`  
+**Output:** `PARATEC_substations.csv`
 
-**Outputs:**
-- `PARATEC_substations.csv` (tidy CSV; fixes merged rows via selective forward-fill per substation and preserves in-cell line breaks)
+> This original script expects the downloaded Excel by a fixed name; the Snakefile stages it into the step dir before running (only step with staging). It could be also CLI‑enable later to avoid staging entirely.
 
----
+### 3) XM dashboard (markers/lines) → `outputs/03_xm_dashboard/`
+**Script:** `scripts/get_subs_xm_dashboard.py`  
+**Outputs:** `getMarkers.csv`, `getLines.csv`
 
-### 3) UPME pull → `outputs/upme/`
+### 4) UPME pull → `outputs/04_upme/`
 **Script:** `scripts/get_subs_upme.py`  
-**Inputs:** _none_ (calls UPME REST service)  
-**Outputs:**
-- `subestaciones_upme.geojson` (pretty-printed GeoJSON)
-- `subestaciones_upme.csv` (robust quoting, newline handling, and name filtering)
+**Outputs:** `subestaciones_upme.geojson`, `subestaciones_upme.csv`
+
+### 5) XM ⟵ UPME union → `outputs/05_xm_upme_union/`
+**Script:** `scripts/xm_upme_union_cli.py`  
+**Inputs:** step 3 markers, step 4 UPME CSV  
+**Output:** `XM_enriched_with_UPME_coords.csv`
+
+### 6) Enrich PARATEC with XM coords → `outputs/06_enrich_xm/`
+**Script:** `scripts/enrich_xm_with_coords_cli.py`  
+**Inputs:** step 2 PARATEC CSV, step 5 enriched XM  
+**Output:** `PARATEC_enriched_with_XMcoords.csv`
+
+### 7) OSM ⟷ PARATEC union + reports → `outputs/07_osm_xmparatec/`
+**Script:** `scripts/osm_xmparatec_cli.py`  
+**Inputs:** step 1 OSM dedup, step 6 PARATEC_enriched_with_XMcoords  
+**Outputs:**  
+- `PARATEC_enriched_with_OSMcoords_with_location.csv` (main)  
+- `OSM_unmatched_sites.csv` (report)  
+- (script also logs coverage stats and optional GeoJSONs)
+
+### 8) Interactive map → `outputs/08_plot/`
+**Script:** `scripts/plot_map_cli.py`  
+**Input:** step 7 curated CSV  
+**Output:** `paratec_map.html`
 
 ---
 
-### 4) Merge XM + UPME → `outputs/merge/`
-**Script:** `scripts/merge_subestaciones.py`  
-**Inputs:**
-- `PARATEC_substations.csv` (from Stage 2)
-- `subestaciones_upme.csv` (from Stage 3)
+## 🧪 Handy commands
 
-**Outputs:**
-- **Main:** `PARATEC_with_coords.csv` (XM with coordinates from UPME where available)
-- **Secondary:**
-  - `PARATEC_unmatched_in_UPME.csv`
-  - `PARATEC_fuzzy_matches.csv`
-
----
-
-### 5) OSM ↔ XM match + reports → `outputs/match/`
-**Script:** `scripts/osm_paratec_match.py`  
-**Inputs:**
-- `PARATEC_with_coords.csv` (from Stage 4)
-- `osm_substations_filtered.csv` (from Stage 1)
-
-**Outputs:**
-- **Main:** `OSM_PARATEC_enriched.csv` (integrated OSM + XM + UPME dataset)
-- **Secondary:**
-  - `PARATEC_enriched_coords.csv`
-  - `PARATEC_not_in_OSM.geojson`
-  - `PARATEC_not_in_OSM.csv`
-  - `PARATEC_not_in_OSM_missing_coords.csv`
-  - `MATCHES_by_type.csv`
-  - `MATCHES_summary.csv`
-
----
-
-### 6) Interactive map → `outputs/map/`
-**Script:** `scripts/plot_map.py`  
-**Inputs:**
-- `OSM_PARATEC_enriched.csv` (from Stage 5)
-
-**Outputs:**
-- `paratec_map.html` (interactive map for exploration/QA)
-
----
-
-## Usage tips
-
-- **Run everything**
+- Run a specific step (builds prerequisites automatically):
   ```bash
-  snakemake -j 4
+  snakemake outputs/08_plot/paratec_map.html -j 2 -p
   ```
 
-- **Build a specific final target** (prerequisites build automatically)
-  ```bash
-  snakemake outputs/map/paratec_map.html -j 4 -p
-  ```
-
-- **Rebuild one stage from scratch** (delete that stage’s outputs, then rebuild)
-  ```bash
-  rm -f outputs/merge/*
-  snakemake outputs/merge/PARATEC_with_coords.csv -j 2 -p
-  ```
-
-- **Visualize the DAG**
+- Visualize the DAG:
   ```bash
   snakemake --dag | dot -Tpng > dag.png
   ```
 
-- **Pick parallelism**
-  - Day-to-day: `-j 3` to `-j 6`
-  - Debugging: `-j 1 -p --verbose`
-
-- **Run only the map after matching**
+- Force rerun a step:
   ```bash
-  snakemake outputs/map/paratec_map.html -j 1 -p
+  rm -f outputs/05_xm_upme_union/*
+  snakemake outputs/05_xm_upme_union/XM_enriched_with_UPME_coords.csv -j 2 -p
   ```
 
-
-- **Inspect detailed logs**
-  - Run with:
-    ```bash
-    snakemake -j 1 -p --verbose
-    ```
-  - Or check `.snakemake/log/*.log`.
+- Increase parallel jobs:
+  ```bash
+  snakemake -j 6
+  ```
 
 ---
+
+## 🛠️ Troubleshooting
+
+- **`clean_paratec_subestaciones.py` can’t find the Excel**  
+  Ensure the file exists at `data/PARATEC_Subestaciones30-08-2025.xlsx`. The Snakefile stages it into the step folder before running.
+
+
+- **Overpass rate limits**  
+  If OSM requests time out, simply re-run Snakemake. The OSM step has no inputs, so it will re-execute and write fresh outputs.
+
+
+---
+
+## 📄 License & attribution
+
+This repository is open-source software developed by [Open Energy Transition (OET)](https://openenergytransition.org)
+and distributed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
+
+You are free to use, modify, and distribute this software under the same license,
+provided that any derivative works or services built upon it remain open source.
+

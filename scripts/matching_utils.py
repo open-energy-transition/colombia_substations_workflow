@@ -2,186 +2,195 @@
 """
 matching_utils.py
 
-Shared name-matching utilities for PARATEC/UPME/OSM workflows.
+Single source of truth for ALL matching functionality:
+- Voltage stripping and heavy station name cleanup (parentheses, admin tails)
+- Roman↔Arabic numerals, tokenization, stopwords, domain aliases
+- Canonical station key builders (strict, relaxed, station, station_plus)
+- Fuzzy helpers (RapidFuzz if present; safe fallback)
+- Coordinate helpers: Haversine + optional BallTree (scikit-learn) with meters output
 
-Exports (stable API):
-- FUZZY_THRESHOLD
-- HAS_RAPIDFUZZ
-- _ROMAN_MAP
-- _STOPWORDS
-- strip_accents
-- normalize_core
-- roman_to_arabic_token
-- arabic_to_roman_token
-- tokenize
-- normalized_key_strict
-- normalized_key_relaxed
-- normalized_key  (alias to strict for backward-compat)
-- collapse_repeats
-- build_blocks
-- candidate_set
-- score_pair
+Only this file should contain matching logic. Main scripts should import and use these helpers.
 """
 
 from __future__ import annotations
+from typing import Iterable, List, Tuple, Dict, Optional
 import re
 import unicodedata
-from collections import defaultdict
+import math
 
-# --- RapidFuzz (optional) at module import ---
+# ------------------------ Optional deps ------------------------
+HAS_RAPIDFUZZ = False
+RF_FUZZ = None
+RF_JW = None  
+
 try:
-    from rapidfuzz import fuzz
+    from rapidfuzz import fuzz as RF_FUZZ  # token_set_ratio, token_sort_ratio, etc.
     try:
-        from rapidfuzz.distance import JaroWinkler as RF_JW
+        
+        from rapidfuzz.distance import JaroWinkler as _RF_JW_CLASS  # type: ignore
+        RF_JW = _RF_JW_CLASS
     except Exception:
+        
         RF_JW = None
     HAS_RAPIDFUZZ = True
 except Exception:
-    fuzz = None
+    RF_FUZZ = None
     RF_JW = None
     HAS_RAPIDFUZZ = False
 
-# Default fuzzy acceptance threshold (0-100)
-FUZZY_THRESHOLD: int = 63
+# scikit-learn BallTree (optional)
+try:
+    from sklearn.neighbors import BallTree as _BallTree 
+except Exception:
+    _BallTree = None
 
-# Roman numerals (lowercase) map used both directions
-_ROMAN_MAP = {
-    "i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5",
-    "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10",
-}
+# ------------------------ Tunables -----------------------------
+FUZZY_THRESHOLD = 70     # You can override from the main script
+DEFAULT_RADIUS_M = 3000.0
 
-# Domain stopwords: generic facility terms, articles, directions, abbreviations,
-# brand prefixes that often appear in OSM names, and frequent local tokens.
-_STOPWORDS = {
-    "subestacion","subestación","se","s/e","estacion","estación",
-    "san","santo","santa","sta","sto","sa","calle","cll","av","avenida",
-    "norte","sur","este","oeste","oriente","occidente","de","del","la","el",
-    "eeb","eeeb","bogota","bogotá",
-    "celsia",  # brand prefix often present in OSM facility names
-}
+# ------------------------ Basic cleaning -----------------------
+_WHITESPACE_RE = re.compile(r"\s+")
+_PUNCT_RE = re.compile(r"[^0-9a-zA-ZñÑáéíóúÁÉÍÓÚäëïöüÄËÏÖÜ\s]+")
 
-# -----------------------------
-# Normalization / tokenization
-# -----------------------------
-def strip_accents(s: str) -> str:
-    return "".join(
-        c for c in unicodedata.normalize("NFD", str(s))
-        if unicodedata.category(c) != "Mn"
-    )
+def _collapse_ws(s: str) -> str:
+    return _WHITESPACE_RE.sub(" ", s).strip()
 
-def normalize_core(name: str, keep_parens: bool = False) -> str:
-    """
-    Lowercase, remove accents, remove voltage suffixes, collapse whitespace.
-    If keep_parens=True, treat (), -, _, / as separators (keep content as tokens);
-    otherwise remove parenthesized segments entirely.
-    """
-    if not isinstance(name, str):
+def strip_accents(text: str) -> str:
+    text = "" if text is None else str(text)
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in text if not unicodedata.combining(ch))
+
+def normalize_core(s: str) -> str:
+    s = strip_accents(s).lower()
+    s = _PUNCT_RE.sub(" ", s)
+    return _collapse_ws(s)
+
+# ------------------------ Voltage & noise ----------------------
+# e.g. "115 kV", "34.5kv", "230-kV", "500 / kV"
+_VOLTAGE_RE = re.compile(r"\b\d{1,3}(?:\.\d+)?\s*[-/]?\s*k\s*?v\b", re.IGNORECASE)
+def strip_voltage_tokens(s: str) -> str:
+    if s is None:
         return ""
-    s = strip_accents(name).lower().strip()
-    if keep_parens:
-        s = re.sub(r"[()\-\_/]+", " ", s)
-    else:
-        s = re.sub(r"\(.*?\)", "", s)
-    s = re.sub(r"\b\d+(\.\d+)?\s*kv\b", "", s)    # remove "115 kV", "34.5kv", etc.
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+    return _collapse_ws(_VOLTAGE_RE.sub(" ", str(s)))
 
+# parentheses (e.g., "(NARIÑO)")
+_PARENS_RE = re.compile(r"\([^)]*\)")
+# trailing admin tail after dash/comma (e.g., " - Antioquia", ", Bogotá")
+_TRAIL_ADMIN_RE = re.compile(r"[\s]*[-–—,]\s*[A-Za-zÁÉÍÓÚÜÑáéíóúüñ\s]+$")
+# squeeze multiple separators
+_MULTI_SEP_RE = re.compile(r"[/_\-–—]{2,}")
+
+def heavy_station_clean(s: str) -> str:
+    """Heavier cleanup for station names: voltage, parentheses, trailing '- Departamento', repeated separators."""
+    s = strip_voltage_tokens(s)
+    s = _PARENS_RE.sub(" ", s)
+    s = _TRAIL_ADMIN_RE.sub(" ", s)
+    s = _MULTI_SEP_RE.sub(" ", s)
+    s = s.replace("-", " ").replace("–", " ").replace("—", " ").replace("/", " ")
+    return normalize_core(s)
+
+# ------------------------ Romans & tokens ----------------------
+_ROMAN_MAP = {
+    "i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8,
+    "ix": 9, "x": 10, "xi": 11, "xii": 12, "xiii": 13, "xiv": 14, "xv": 15
+}
 def roman_to_arabic_token(tok: str) -> str:
-    return _ROMAN_MAP.get(tok, tok)
+    t = tok.lower()
+    return str(_ROMAN_MAP[t]) if t in _ROMAN_MAP else tok
 
 def arabic_to_roman_token(tok: str) -> str:
-    inv = {v: k for k, v in _ROMAN_MAP.items()}
-    return inv.get(tok, tok)
+    # Minimal reverse mapping for small numerals used in station names
+    try:
+        n = int(tok)
+    except Exception:
+        return tok
+    rev = {v: k.upper() for k, v in _ROMAN_MAP.items()}
+    return rev.get(n, tok)
 
-def tokenize(name: str):
-    """
-    Tokenize a normalized string into domain-meaningful tokens, augmenting with
-    roman/arabic variants and removing stopwords.
-    """
-    s = re.sub(r"[^a-z0-9\s]+", " ", name)
-    toks = [t for t in s.split() if t]
+_STOPWORDS = {
+    "subestacion", "subestación", "sub", "se", "estacion", "estación",
+    "de", "del", "la", "el", "los", "las", "y", "the",
+}
+
+_ALIAS_MAP = {
+    "sta": "santa", "sta.": "santa", "sto": "san", "sto.": "san",
+    "sn": "san", "snta": "santa", "nte": "n", "norte": "n",
+    "sur": "s", "occidente": "o", "oriente": "e", "este": "e", "oeste": "o",
+}
+
+def _alias(tok: str) -> str:
+    return _ALIAS_MAP.get(tok, tok)
+
+def tokenize(s: str) -> List[str]:
+    s = normalize_core(s)
+    toks = [t for t in s.split(" ") if t]
     out = []
     for t in toks:
-        t1 = roman_to_arabic_token(t); out.append(t1)
-        t2 = arabic_to_roman_token(t1)
-        if t2 != t1:
-            out.append(t2)
-    out = [t for t in out if t not in _STOPWORDS and (len(t) > 1 or t.isdigit())]
+        t = roman_to_arabic_token(t)
+        t = _alias(t)
+        if t in _STOPWORDS:
+            continue
+        out.append(t)
     return out
 
-def _collapse_non_alnum(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", s)
+def collapse_repeats(key: str) -> str:
+    toks = key.split()
+    out = []
+    seen = set()
+    for t in toks:
+        if (t, len(out)) not in seen:
+            out.append(t)
+            seen.add((t, len(out)))
+    return " ".join(out)
 
+# ------------------------ Key builders ------------------------
 def normalized_key_strict(name: str) -> str:
-    """
-    Strict key: preserves all tokens (does NOT remove stopwords).
-    Matches the original behavior you had in the pipeline.
-    """
-    core = normalize_core(name)
-    core = _collapse_non_alnum(core)
-    for r, a in _ROMAN_MAP.items():
-        core = re.sub(rf"{r}(?![a-z0-9])", a, core)
-    return core
+    """Aggressive generic normalization, no domain extras."""
+    toks = tokenize(name)
+    return collapse_repeats(" ".join(toks))
 
 def normalized_key_relaxed(name: str) -> str:
-    """
-    Relaxed key: removes domain stopwords / brand prefixes and collapses the rest.
-    Useful for variants.
-    """
-    core = normalize_core(name)
-    words = [w for w in core.split() if w not in _STOPWORDS]
-    core2 = "".join(words)
-    for r, a in _ROMAN_MAP.items():
-        core2 = re.sub(rf"{r}(?![a-z0-9])", a, core2)
-    core2 = _collapse_non_alnum(core2)
-    return core2
+    """Light cleanup; keep more tokens (useful before fuzzy)."""
+    return normalize_core(name)
 
-# Backward-compat alias (your scripts call normalized_key)
-normalized_key = normalized_key_strict
+def normalized_key_station(name: str) -> str:
+    """Domain-aware, but without voltage-specific extras."""
+    base = normalize_core(name)
+    toks = tokenize(base)
+    return collapse_repeats(" ".join(toks))
 
-def collapse_repeats(s: str) -> str:
-    """Collapse repeated letters. Keeps digits unchanged."""
-    return re.sub(r"([a-z])\1+", r"\1", s)
+def normalized_key_station_plus(name: str) -> str:
+    """Strongest: heavy cleanup (strips voltage, parens, admin tails) + domain aliases + roman→arabic."""
+    base = heavy_station_clean(name)
+    toks = tokenize(base)
+    return collapse_repeats(" ".join(toks))
 
-# -----------------------------
-# Candidate blocking & scoring
-# -----------------------------
-def build_blocks(keys_tokens: dict):
-    by_initial = defaultdict(set)
-    by_lenband = defaultdict(set)
-    token_index = defaultdict(set)
-    for k, toks in keys_tokens.items():
-        if not k:
-            continue
-        by_initial[k[0]].add(k)
-        by_lenband[len(k)//3].add(k)
-        for t in set(toks):
-            token_index[t].add(k)
-    return by_initial, by_lenband, token_index
+# ------------------------ Fuzzy helpers ------------------------
+def fuzzy_score(a: str, b: str) -> float:
+    """Composite fuzzy score on normalized inputs (0..100)."""
+    a_key = normalized_key_relaxed(a)
+    b_key = normalized_key_relaxed(b)
+    if not a_key or not b_key:
+        return 0.0
 
-def candidate_set(k, toks, by_initial, by_lenband, token_index):
-    cands = set()
-    if k:
-        cands |= by_initial.get(k[0], set())
-        cands |= by_lenband.get(len(k)//3, set())
-    for t in set(toks):
-        cands |= token_index.get(t, set())
-    return list(cands)
+    # token Jaccard (cheap + robust)
+    a_tokens = set(a_key.split())
+    b_tokens = set(b_key.split())
+    inter = len(a_tokens & b_tokens)
+    union = len(a_tokens | b_tokens)
+    jacc = (100.0 * inter / union) if union else 0.0
 
-def score_pair(a_key, a_tokens, b_key, b_tokens, rf=None):
-    """
-    Composite 0–100 score combining token-based similarities.
-    Uses RapidFuzz when available; otherwise falls back to difflib on token-sorted strings.
-    """
-    sa, sb = set(a_tokens), set(b_tokens)
-    denom = len(sa | sb)
-    jacc = 100.0 * (len(sa & sb) / denom) if denom else 0.0
+    # space-insensitive strings
+    a_ns = a_key.replace(" ", "")
+    b_ns = b_key.replace(" ", "")
 
-    if HAS_RAPIDFUZZ and fuzz is not None:
-        tset  = fuzz.token_set_ratio(a_key, b_key)
-        tsort = fuzz.token_sort_ratio(a_key, b_key)
-        part  = fuzz.partial_ratio(a_key, b_key)
+    if HAS_RAPIDFUZZ and RF_FUZZ is not None:
+        tset  = RF_FUZZ.token_set_ratio(a_key, b_key)
+        tsort = RF_FUZZ.token_sort_ratio(a_key, b_key)
+        part  = RF_FUZZ.partial_ratio(a_key, b_key)
         jw    = 100.0 * RF_JW.normalized_similarity(a_key, b_key) if RF_JW else 0.0
+        # character-level, no-spaces ratio
+        ns_ch = RF_FUZZ.ratio(a_ns, b_ns)
     else:
         import difflib
         a_tok = " ".join(sorted(a_tokens))
@@ -189,5 +198,53 @@ def score_pair(a_key, a_tokens, b_key, b_tokens, rf=None):
         ratio = 100.0 * difflib.SequenceMatcher(None, a_tok, b_tok).ratio()
         tset = tsort = part = ratio
         jw   = 0.0
+        ns_ch = 100.0 * difflib.SequenceMatcher(None, a_ns, b_ns).ratio()
 
-    return 0.35*tset + 0.25*tsort + 0.15*part + 0.15*jacc + 0.10*jw
+    # Blend: bump weight on no-space char match slightly to favor compounds
+    return 0.30*tset + 0.22*tsort + 0.13*part + 0.15*jacc + 0.10*jw + 0.10*ns_ch
+
+# ------------------------ Coordinates -------------------------
+EARTH_R_M = 6371000.0
+
+def haversine_m(lat1, lon1, lat2, lon2) -> float:
+    """Return great-circle distance in meters."""
+    dlat = math.radians(float(lat2) - float(lat1))
+    dlon = math.radians(float(lon2) - float(lon1))
+    a = (math.sin(dlat/2)**2 +
+         math.cos(math.radians(float(lat1))) *
+         math.cos(math.radians(float(lat2))) *
+         math.sin(dlon/2)**2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return EARTH_R_M * c
+
+def _deg_to_rad(series):
+    import numpy as np
+    return np.radians(series.astype(float).values)
+
+def _to_radians(lat_series, lon_series):
+    import numpy as np
+
+    EARTH_R_M = 6371000.0
+
+    def _deg_to_rad(series):
+        return np.radians(series.astype(float).values)
+
+    def _to_radians(lat_series, lon_series):
+        """Return Nx2 array in radians for BallTree(haversine)."""
+        lat = _deg_to_rad(lat_series)
+        lon = _deg_to_rad(lon_series)
+        return np.vstack([lat, lon]).T
+
+def build_balltree_haversine(lat_series, lon_series):
+    """Build a BallTree (haversine metric). Raises if sklearn is missing."""
+    if _BallTree is None:
+        raise RuntimeError("scikit-learn is not available; cannot build BallTree.")
+    pts = _to_radians(lat_series, lon_series)
+    tree = _BallTree(pts, metric="haversine")
+    return tree, pts
+
+def tree_knearest_m(tree, query_rad, k=1):
+    """Return (dist_m, idx) for nearest neighbors on a haversine BallTree."""
+    dist_rad, idx = tree.query(query_rad, k=k)
+    dist_m = dist_rad * EARTH_R_M
+    return dist_m, idx
