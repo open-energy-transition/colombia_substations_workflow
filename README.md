@@ -8,7 +8,7 @@ End-to-end, reproducible pipeline to ingest, clean, enrich, match and visualize 
 
 ---
 
-## 📁 Project layout
+## Project layout
 
 ```
 .
@@ -41,7 +41,7 @@ End-to-end, reproducible pipeline to ingest, clean, enrich, match and visualize 
 
 ---
 
-## ⚙️ Requirements
+## Requirements
 
 - **Python** 3.9+ (tested with 3.11)
 - **Snakemake** (`pip install snakemake`)
@@ -59,7 +59,7 @@ pip install -r requirements.txt   # create one if you like
 
 ---
 
-## 🧰 Configuration (`config.yaml`)
+## Configuration (`config.yaml`)
 
 ```yaml
 dirs:
@@ -119,7 +119,7 @@ inputs:
 
 ---
 
-## ▶️ Running
+## Running
 
 **1) Put the Excel in `data/`:**
 ```
@@ -139,7 +139,7 @@ outputs/08_plot/paratec_map.html
 
 ---
 
-## 🧱 Workflow stages
+## Workflow stages
 
 Each stage runs in its own output folder and writes its own artifacts there.
 
@@ -191,7 +191,7 @@ Each stage runs in its own output folder and writes its own artifacts there.
 
 ---
 
-## 🧪 Handy commands
+## Handy commands
 
 - Run a specific step (builds prerequisites automatically):
   ```bash
@@ -216,7 +216,7 @@ Each stage runs in its own output folder and writes its own artifacts there.
 
 ---
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 - **`clean_paratec_subestaciones.py` can’t find the Excel**  
   Ensure the file exists at `data/PARATEC_Subestaciones30-08-2025.xlsx`. The Snakefile stages it into the step folder before running.
@@ -228,7 +228,7 @@ Each stage runs in its own output folder and writes its own artifacts there.
 
 ---
 
-## 📄 License & attribution
+## License & attribution
 
 This repository is open-source software developed by [Open Energy Transition (OET)](https://openenergytransition.org)
 and distributed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
