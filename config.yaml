@@ -1,0 +1,52 @@
+dirs:
+  data: "data"
+  scripts: "scripts"
+  outputs: "outputs"
+
+steps:
+  osm: "01_osm"
+  paratec_clean: "02_paratec_clean"
+  xm_dashboard: "03_xm_dashboard"
+  upme: "04_upme"
+  xm_upme_union: "05_xm_upme_union"
+  enrich_xm: "06_enrich_xm"
+  osm_xmparatec: "07_osm_xmparatec"
+  plot: "08_plot"
+
+scripts:
+  osm: "get_osm_subs_improved.py"
+  clean_paratec: "clean_paratec_subestaciones.py"
+  xm_dashboard: "get_subs_xm_dashboard.py"
+  upme: "get_subs_upme.py"
+  xm_upme_union: "xm_upme_union.py"           
+  enrich_xm_with_coords: "enrich_xm_with_coords.py"  
+  osm_xmparatec: "osm_xmparatec.py"                  
+  plot_map: "plot_map.py"                            
+  utils: "matching_utils.py"
+
+files:
+  osm:
+    raw: "osm_substations_raw.csv"
+    filtered: "osm_substations_filtered.csv"
+    dropped: "osm_substations_dropped_debug.csv"
+    dedup: "osm_substations_dedup.csv"
+  paratec_clean:
+    csv: "PARATEC_substations.csv"
+  xm_dashboard:
+    markers: "getMarkers.csv"
+    lines: "getLines.csv"
+  upme:
+    geojson: "subestaciones_upme.geojson"
+    csv: "subestaciones_upme.csv"
+  xm_upme_union:
+    enriched_xm: "XM_enriched_with_UPME_coords.csv"
+  enrich_xm:
+    paratec_enriched_xm: "PARATEC_enriched_with_XMcoords.csv"
+  osm_xmparatec:
+    paratec_enriched_osm: "PARATEC_enriched_with_OSMcoords_with_location.csv"
+    osm_unmatched: "OSM_unmatched_sites.csv"
+  plot:
+    html: "paratec_map.html"
+
+inputs:
+  paratec_xlsx: "PARATEC_Subestaciones30-08-2025.xlsx"
