@@ -27,7 +27,7 @@ from branca.element import MacroElement, Template
 import argparse
 def parse_args():
     p = argparse.ArgumentParser(description="Plot Folium map from curated CSV (paths as args).")
-    p.add_argument("--in", dest="csv_in", help="Path to PARATEC_enriched_with_OSMcoords_with_location.csv")
+    p.add_argument("--in", dest="csv_in", help="final_dataset.csv")
     p.add_argument("--out", dest="out_html", help="Path to output HTML map")
     return p.parse_args()
 
