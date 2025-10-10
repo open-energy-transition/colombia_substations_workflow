@@ -17,6 +17,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import csv
 
+import truststore
+truststore.inject_into_ssl()
+
 BASE = "https://geo.upme.gov.co/server/rest/services/Capas_EnergiaElectrica/sistema_transmision_subestaciones_construidas/FeatureServer/18"
 
 def session():
