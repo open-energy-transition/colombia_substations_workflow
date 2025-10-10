@@ -43,7 +43,7 @@ files:
   enrich_xm:
     paratec_enriched_xm: "PARATEC_enriched_with_XMcoords.csv"
   osm_xmparatec:
-    paratec_enriched_osm: "PARATEC_enriched_with_OSMcoords_with_location.csv"
+    paratec_enriched_osm: "final_dataset.csv"
     osm_unmatched: "OSM_unmatched_sites.csv"
   plot:
     html: "paratec_map.html"
